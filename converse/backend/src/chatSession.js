@@ -27,7 +27,13 @@ async function fetchWithRetries(url, options = {}, retries = 2, backoffMs = 300)
 }
 
 export async function createSession(userId) {
-  const apiKey = getApiKey();
+  const apiKey = process.env.ONDEMAND_API_KEY;
+
+  // Fallback: return mock session if credentials not set
+  if (!apiKey) {
+    console.warn("Chat API credentials not configured. Returning mock session.");
+    return `mock-session-${userId}-${Date.now()}`;
+  }
 
   const res = await fetchWithRetries(`${BASE}/sessions`, {
     method: "POST",
@@ -65,7 +71,19 @@ export async function createSession(userId) {
 }
 
 export async function sendMessage(sessionId, message) {
-  const apiKey = getApiKey();
+  const apiKey = process.env.ONDEMAND_API_KEY;
+
+  // Fallback: return mock response if credentials not set
+  if (!apiKey) {
+    console.warn("Chat API credentials not configured. Returning mock response.");
+    return {
+      success: true,
+      data: {
+        content: `Mock response to: "${message}". To enable real chat, configure ONDEMAND_API_KEY environment variable.`,
+        timestamp: new Date().toISOString()
+      }
+    };
+  }
 
   const res = await fetchWithRetries(`${BASE}/sessions/${sessionId}/query`, {
     method: "POST",

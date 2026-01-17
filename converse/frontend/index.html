@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevOS Converse</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="chat-container">
+            <div class="header">
+                <h1>DevOS Converse</h1>
+                <p class="subtitle">Chat & Workflow Execution</p>
+            </div>
+
+            <div class="chat-box" id="chatBox">
+                <div class="welcome-message">
+                    <h2>Welcome to DevOS Converse</h2>
+                    <p>Enter your message below to start the conversation.</p>
+                </div>
+            </div>
+
+            <div class="input-section">
+                <form id="messageForm">
+                    <input 
+                        type="text" 
+                        id="messageInput" 
+                        placeholder="Type your message..." 
+                        autocomplete="off"
+                        required
+                    >
+                    <button type="submit" id="sendBtn">Send</button>
+                </form>
+            </div>
+
+            <div class="info-panel">
+                <div class="status-indicator" id="statusIndicator">Ready</div>
+                <div class="user-id-section">
+                    <label for="userIdInput">User ID:</label>
+                    <input 
+                        type="text" 
+                        id="userIdInput" 
+                        placeholder="Enter your user ID" 
+                        value="user123"
+                    >
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
