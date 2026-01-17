@@ -104,70 +104,49 @@ function addMessage(text, type) {
 function formatBotResponse(responseObj) {
     let html = '';
 
-    // Show the full response for debugging
-    html += `<details style="margin-bottom: 10px;">`;
-    html += `<summary style="cursor: pointer; font-size: 12px; color: #666;">📋 Full Response (Click to expand)</summary>`;
-    html += `<pre style="margin-top: 8px; padding: 8px; background: #f0f0f0; border-radius: 4px; font-size: 11px; overflow-x: auto;">${escapeHtml(JSON.stringify(responseObj, null, 2))}</pre>`;
-    html += `</details>`;
+    // Show only the message content - extract it smartly
+    let messageContent = '';
 
     if (responseObj.chatResponse) {
-        html += `<strong>💬 Chat Response:</strong><br>`;
         const chat = responseObj.chatResponse;
         
-        let chatContent = '';
         if (typeof chat === 'string') {
-            chatContent = chat;
+            messageContent = chat;
+        } else if (chat.data?.answer) {
+            // Extract answer from the nested data structure (most common format)
+            messageContent = chat.data.answer;
         } else if (chat.content) {
-            chatContent = chat.content;
+            messageContent = chat.content;
         } else if (chat.data?.content) {
-            chatContent = chat.data.content;
+            messageContent = chat.data.content;
         } else if (chat.data?.message) {
-            chatContent = chat.data.message;
+            messageContent = chat.data.message;
         } else if (chat.message) {
-            chatContent = chat.message;
-        } else {
-            chatContent = JSON.stringify(chat, null, 2);
+            messageContent = chat.message;
         }
-        
-        html += `<div style="margin-top: 8px; padding: 10px; background: #e8f4f8; border-left: 3px solid #667eea; border-radius: 4px;">${escapeHtml(chatContent)}</div>`;
     }
 
     if (responseObj.workflowResult) {
-        if (html && !html.includes('Full Response')) html += '<br>';
-        html += `<strong>⚙️ Workflow Result:</strong><br>`;
         const workflow = responseObj.workflowResult;
         
-        let status = 'Completed';
-        let message = '';
-        let details = '';
-        
-        if (typeof workflow === 'string') {
-            message = workflow;
-        } else {
-            // Handle different success field values
-            if (workflow.success === false) {
-                status = '✗ Failed';
-            } else if (workflow.success === true) {
-                status = '✓ Success';
-            }
-            message = workflow.message || '';
-            if (workflow.data) {
-                // Show data if it exists
-                const dataStr = JSON.stringify(workflow.data);
-                if (dataStr !== '{}' && dataStr !== '[]') {
-                    details = dataStr;
-                }
-            }
+        if (typeof workflow === 'string' && workflow) {
+            if (messageContent) messageContent += '\n\n' + workflow;
+            else messageContent = workflow;
+        } else if (workflow.message) {
+            if (messageContent) messageContent += '\n\n' + workflow.message;
+            else messageContent = workflow.message;
         }
-        
-        html += `<div style="margin-top: 8px; padding: 10px; background: #f0f8e8; border-left: 3px solid #764ba2; border-radius: 4px;">`;
-        html += `Status: ${status}`;
-        if (message) html += `<br>Message: ${escapeHtml(message)}`;
-        if (details) html += `<br><small>Data: <pre style="margin: 5px 0; padding: 5px; background: #fff; border-radius: 3px; overflow-x: auto;">${escapeHtml(details)}</pre></small>`;
-        html += '</div>';
     }
 
-    return html || '<em>Processing complete - no response data</em>';
+    // If we extracted content, show it in a simple box
+    if (messageContent) {
+        html = `<div style="padding: 12px; background: #f0f0f0; border-radius: 8px; line-height: 1.6;">${escapeHtml(messageContent)}</div>`;
+    } else {
+        // Fallback: show raw JSON if no message found
+        html = `<div style="padding: 12px; background: #f0f0f0; border-radius: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-word;">${escapeHtml(JSON.stringify(responseObj, null, 2))}</div>`;
+    }
+
+    return html;
 }
 
 function escapeHtml(text) {

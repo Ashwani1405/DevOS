@@ -37,17 +37,12 @@ export async function executeWorkflow(message) {
   const apiKey = process.env.ONDEMAND_API_KEY;
   const workflowId = process.env.WORKFLOW_ID;
 
-  // Fallback: return mock workflow result if credentials not set
-  if (!apiKey || !workflowId) {
-    console.warn("Workflow API credentials not configured. Returning mock result.");
-    return {
-      success: true,
-      message: "Workflow executed (mock mode - configure ONDEMAND_API_KEY and WORKFLOW_ID for real execution)",
-      data: {
-        input: message,
-        timestamp: new Date().toISOString()
-      }
-    };
+  // If credentials are not properly set, don't attempt API call
+  const isInvalidApiKey = !apiKey || apiKey.includes('your_') || apiKey.toLowerCase() === 'none';
+  const isInvalidWorkflowId = !workflowId || workflowId.includes('your_') || workflowId.toLowerCase() === 'none';
+  
+  if (isInvalidApiKey || isInvalidWorkflowId) {
+    return null; // Return null to indicate workflow not configured
   }
 
   const res = await fetchWithRetries(
@@ -72,9 +67,8 @@ export async function executeWorkflow(message) {
   }
 
   if (!res.ok) {
-    throw new Error(
-      `Workflow execution failed (${res.status}): ${JSON.stringify(json)}`
-    );
+    console.error(`Workflow API error (${res.status}):`, json);
+    return null; // Return null on error instead of throwing or returning mock
   }
 
   return json;

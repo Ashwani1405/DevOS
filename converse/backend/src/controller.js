@@ -28,13 +28,18 @@ export async function handleMessage(req, res) {
       const chatResponse = await sendMessage(sessionId, message);
       const workflowResult = await executeWorkflow(message);
 
-      // Store results
-      results.set(userId, {
+      // Store results - only include workflowResult if it's not null
+      const resultData = {
         status: "done",
         chatResponse,
-        workflowResult,
         completedAt: new Date()
-      });
+      };
+      
+      if (workflowResult) {
+        resultData.workflowResult = workflowResult;
+      }
+
+      results.set(userId, resultData);
     } catch (err) {
       console.error(`Async processing error for user ${userId}:`, err);
       
