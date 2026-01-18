@@ -1,8 +1,8 @@
-// Determine API URL based on environment
 const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? 'http://localhost:3000'
     : `http://${window.location.hostname}:3000`;
 
+const TTS_API_URL = 'https://api.on-demand.io/services/v1/public/service/execute/text_to_speech';
 const POLL_INTERVAL = 1000; // 1 second
 
 console.log('API Base URL:', API_BASE_URL);
@@ -92,6 +92,16 @@ function addMessage(text, type) {
 
     messageEl.appendChild(contentEl);
 
+    // Add TTS button for bot messages
+    if (type === 'bot') {
+        const ttsBtn = document.createElement('button');
+        ttsBtn.className = 'tts-btn';
+        ttsBtn.title = 'Listen';
+        ttsBtn.innerHTML = '🔊';
+        ttsBtn.onclick = () => playTextToSpeech(extractPlainText(contentEl.innerText));
+        messageEl.appendChild(ttsBtn);
+    }
+
     const metaEl = document.createElement('div');
     metaEl.className = 'message-meta';
     metaEl.textContent = new Date().toLocaleTimeString();
@@ -99,6 +109,12 @@ function addMessage(text, type) {
 
     chatBox.appendChild(messageEl);
     chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+function extractPlainText(html) {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    return div.innerText || div.textContent || '';
 }
 
 function formatBotResponse(responseObj) {
@@ -123,24 +139,41 @@ function formatBotResponse(responseObj) {
             messageContent = chat.data.message;
         } else if (chat.message) {
             messageContent = chat.message;
+        } else {
+            // As a last resort, stringify chat
+            try {
+                messageContent = JSON.stringify(chat, null, 2);
+            } catch (e) {
+                messageContent = String(chat);
+            }
         }
     }
 
+    // Merge workflow result into the displayed message without breaking formatting
     if (responseObj.workflowResult) {
-        const workflow = responseObj.workflowResult;
-        
-        if (typeof workflow === 'string' && workflow) {
-            if (messageContent) messageContent += '\n\n' + workflow;
-            else messageContent = workflow;
-        } else if (workflow.message) {
-            if (messageContent) messageContent += '\n\n' + workflow.message;
-            else messageContent = workflow.message;
+        const wf = responseObj.workflowResult;
+        let wfText = '';
+
+        if (!wf) wfText = '';
+        else if (typeof wf === 'string') wfText = wf;
+        else if (wf.output) wfText = (typeof wf.output === 'string') ? wf.output : JSON.stringify(wf.output, null, 2);
+        else if (wf.data) wfText = (typeof wf.data === 'string') ? wf.data : JSON.stringify(wf.data, null, 2);
+        else if (wf.result) wfText = (typeof wf.result === 'string') ? wf.result : JSON.stringify(wf.result, null, 2);
+        else if (wf.message) wfText = wf.message;
+        else if (wf.executionID) wfText = `Execution ID: ${wf.executionID}`;
+        else {
+            try { wfText = JSON.stringify(wf, null, 2); } catch (e) { wfText = String(wf); }
+        }
+
+        if (wfText) {
+            if (messageContent) messageContent += '\n\n' + 'Workflow result:\n' + wfText;
+            else messageContent = 'Workflow result:\n' + wfText;
         }
     }
 
     // If we extracted content, show it in a simple box
     if (messageContent) {
-        html = `<div style="padding: 12px; background: #f0f0f0; border-radius: 8px; line-height: 1.6;">${escapeHtml(messageContent)}</div>`;
+        html = `<div style="padding: 12px; background: #f0f0f0; border-radius: 8px; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(messageContent)}</div>`;
     } else {
         // Fallback: show raw JSON if no message found
         html = `<div style="padding: 12px; background: #f0f0f0; border-radius: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-word;">${escapeHtml(JSON.stringify(responseObj, null, 2))}</div>`;
@@ -227,3 +260,63 @@ window.addEventListener('beforeunload', () => {
         clearTimeout(pollTimeout);
     }
 });
+
+// Text-to-Speech function
+async function playTextToSpeech(text) {
+    if (!text.trim()) {
+        alert('No text to convert');
+        return;
+    }
+
+    try {
+        console.log('Converting to speech:', text);
+        
+        const response = await fetch(`${API_BASE_URL}/tts`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                text: text.substring(0, 4096)
+            })
+        });
+
+        if (!response.ok) {
+            console.error('TTS Error:', response.status);
+            useBrowserSpeech(text);
+            return;
+        }
+
+        const data = await response.json();
+        console.log('TTS Response:', data);
+
+        // If API returns useBrowserTTS flag, use browser speech
+        if (data.useBrowserTTS) {
+            console.log('Falling back to browser TTS');
+            useBrowserSpeech(text);
+            return;
+        }
+
+        // If API has audio URL, play it
+        if (data.data?.audioUrl) {
+            const audio = new Audio(data.data.audioUrl);
+            audio.play();
+            console.log('Playing audio...');
+        }
+    } catch (err) {
+        console.error('TTS Error:', err);
+        useBrowserSpeech(text);
+    }
+}
+
+// Fallback: Use browser's Web Speech API
+function useBrowserSpeech(text) {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+    
+    window.speechSynthesis.cancel(); // Cancel any ongoing speech
+    window.speechSynthesis.speak(utterance);
+    console.log('Using browser Web Speech API');
+}

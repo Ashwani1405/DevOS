@@ -2,14 +2,6 @@ import fetch from "node-fetch";
 
 const BASE = "https://api.on-demand.io/chat/v1";
 
-function getApiKey() {
-  const key = process.env.ONDEMAND_API_KEY;
-  if (!key) {
-    throw new Error("Missing ONDEMAND_API_KEY environment variable");
-  }
-  return key;
-}
-
 async function fetchWithRetries(url, options = {}, retries = 2, backoffMs = 300) {
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -19,19 +11,23 @@ async function fetchWithRetries(url, options = {}, retries = 2, backoffMs = 300)
     } catch (err) {
       lastErr = err;
       if (attempt < retries) {
-        await new Promise((r) => setTimeout(r, backoffMs * Math.pow(2, attempt)));
+        await new Promise((r) =>
+          setTimeout(r, backoffMs * Math.pow(2, attempt))
+        );
       }
     }
   }
-  throw new Error(`Network request failed after ${retries + 1} attempts: ${lastErr?.message}`);
+  throw new Error(
+    `Network request failed after ${retries + 1} attempts: ${lastErr?.message}`
+  );
 }
 
 export async function createSession(userId) {
   const apiKey = process.env.ONDEMAND_API_KEY;
 
-  // Fallback: return mock session if credentials not set
+  // Safe fallback: chat-only mock session
   if (!apiKey) {
-    console.warn("Chat API credentials not configured. Returning mock session.");
+    console.warn("Chat API not configured. Using mock chat session.");
     return `mock-session-${userId}-${Date.now()}`;
   }
 
@@ -39,31 +35,18 @@ export async function createSession(userId) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      apikey: apiKey
+      apikey: apiKey,
     },
     body: JSON.stringify({
-      externalUserId: userId
-    })
+      externalUserId: userId,
+    }),
   });
 
-  let json;
-  try {
-    json = await res.json();
-  } catch (err) {
-    throw new Error(`Invalid JSON in createSession response: ${err.message}`);
-  }
+  const json = await res.json();
 
-  console.log("Create session response:", json);
-
-  if (!res.ok) {
+  if (!res.ok || !json?.data?.id) {
     throw new Error(
-      `Chat session creation failed (${res.status}): ${JSON.stringify(json)}`
-    );
-  }
-
-  if (!json?.data?.id) {
-    throw new Error(
-      `Unexpected createSession response: ${JSON.stringify(json)}`
+      `Chat session creation failed: ${JSON.stringify(json)}`
     );
   }
 
@@ -73,44 +56,37 @@ export async function createSession(userId) {
 export async function sendMessage(sessionId, message) {
   const apiKey = process.env.ONDEMAND_API_KEY;
 
-  // Fallback: return mock response if credentials not set
+  // Safe fallback: pure conversational response
   if (!apiKey) {
-    console.warn("Chat API credentials not configured. Returning mock response.");
     return {
       success: true,
       data: {
-        content: `Mock response to: "${message}". To enable real chat, configure ONDEMAND_API_KEY environment variable.`,
-        timestamp: new Date().toISOString()
-      }
+        content: `Chat response (mock): ${message}`,
+        timestamp: new Date().toISOString(),
+      },
     };
   }
 
-  const res = await fetchWithRetries(`${BASE}/sessions/${sessionId}/query`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: apiKey
-    },
-    body: JSON.stringify({
-      query: message,
-      endpointId: "predefined-openai-gpt4o",
-      responseMode: "sync"
-    })
-  });
+  const res = await fetchWithRetries(
+    `${BASE}/sessions/${sessionId}/query`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: apiKey,
+      },
+      body: JSON.stringify({
+        query: message,
+        endpointId: "predefined-openai-gpt4o",
+        responseMode: "sync",
+      }),
+    }
+  );
 
-  let json;
-  try {
-    json = await res.json();
-  } catch (err) {
-    throw new Error(`Invalid JSON in sendMessage response: ${err.message}`);
-  }
-
-  console.log("Chat query response:", json);
+  const json = await res.json();
 
   if (!res.ok) {
-    throw new Error(
-      `Chat query failed (${res.status}): ${JSON.stringify(json)}`
-    );
+    throw new Error(`Chat query failed: ${JSON.stringify(json)}`);
   }
 
   return json;
