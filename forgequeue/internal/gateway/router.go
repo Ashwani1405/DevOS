@@ -61,11 +61,27 @@ func (tr *TaskRouter) RouteTask(
 	//checking if delay seconds is greater than 0 if so we schedule the task to be executed at a later time
 	if delaySeconds > 0 {
 		targetTime := time.Now().Unix() + delaySeconds
-		//dont throw error is its unused
-		_ = targetTime
+		err := tr.redisClient.ZAdd(
+			ctx,
+			"queue:tasks:scheduled",
+			redis.Z{
+				Score:  float64(targetTime),
+				Member: serializedData,
+			},
+		).Err()
+		if err != nil {
+			return err
+		}
 	} else {
 		//if delay seconds is 0 or less we execute the task immediately
-
+		err := tr.redisClient.LPush(
+			ctx,
+			"queue:tasks:immediate",
+			serializedData,
+		).Err()
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
