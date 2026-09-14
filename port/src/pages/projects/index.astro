@@ -1,0 +1,109 @@
+---
+import Layout from "../../layouts/Base.astro";
+import { getCollection } from "astro:content";
+
+const projects = (await getCollection("projects"))
+  .filter((p) => p.data.draft !== true)
+  .sort((a, b) => String(b.data.year).localeCompare(String(a.data.year)));
+---
+
+<Layout title="Projects" description="A selection of projects I've built or contributed to.">
+  <div class="projects-page">
+    <div class="page-hero">
+      <h1>projects</h1>
+      <p class="muted">
+        A selection of things I've built and contributed to.
+      </p>
+    </div>
+
+    {projects.length === 0 ? (
+      <div class="card">
+        <p class="muted">No projects found. Add .md files to content/projects/.</p>
+      </div>
+    ) : (
+      <div class="projects-grid">
+        {projects.map((project) => (
+          <a href={`/projects/${project.data.slug || project.id}`} class="project-card card">
+            <div class="project-card-meta">
+              <span class="project-card-year">{project.data.year}</span>
+              <span class="project-card-status">{project.data.status}</span>
+            </div>
+            <h3 class="project-card-title">{project.data.title}</h3>
+            <p class="project-card-desc">{project.data.description}</p>
+            {project.data.technologies.length > 0 && (
+              <div class="project-card-tech">
+                {project.data.technologies.map((tech) => (
+                  <span class="project-tech-tag">{tech}</span>
+                ))}
+              </div>
+            )}
+          </a>
+        ))}
+      </div>
+    )}
+  </div>
+</Layout>
+
+<style>
+  .projects-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+  }
+
+  .project-card {
+    text-decoration: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    cursor: pointer;
+  }
+
+  .project-card:hover {
+    border-color: var(--border-hover);
+    background: var(--bg-card-hover);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-card-hover);
+  }
+
+  .project-card-meta {
+    display: flex;
+    gap: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+
+  .project-card-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+  }
+
+  .project-card-desc {
+    font-size: 0.9375rem;
+    color: var(--text-secondary);
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .project-card-tech {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.25rem;
+  }
+
+  .project-tech-tag {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.04em;
+    padding: 0.2rem 0.5rem;
+    background: var(--accent-subtle);
+    border-radius: 4px;
+    color: var(--text-muted);
+  }
+</style>

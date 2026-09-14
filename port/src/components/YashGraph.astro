@@ -1,0 +1,852 @@
+---
+import type { GraphData } from "../lib/graph/buildGraph";
+import type { TraceConfig } from "../data/site";
+
+interface Props {
+    graph: GraphData;
+    traces: TraceConfig[];
+}
+
+const { graph, traces } = Astro.props;
+
+const visibleTraces = traces.filter((t) => t.visible !== false);
+
+/*
+ * Preview counts per trace.
+ * These determine how many items show on the homepage — not how many exist.
+ * Content comes from Obsidian collections; fake filler is never added.
+ */
+const PREVIEW_COUNTS: Record<string, number> = {
+    write: 7,
+    build: 5,
+    read: 7,
+};
+
+function itemsFor(trace: TraceConfig) {
+    const limit = PREVIEW_COUNTS[trace.id] ?? 5;
+    return graph.nodes
+        .filter((n) => n.kind === "item" && n.trace === trace.id)
+        .slice(0, limit);
+}
+
+function tracePath(id: string) {
+    if (id === "write") return "/writing";
+    if (id === "build") return "/projects";
+    if (id === "read") return "/shelf";
+    return "#";
+}
+---
+
+<!--
+    TRACE SCENE — 300vh container that supplies the scroll distance.
+    The visual composition inside is sticky (100vh). WRITE / BUILD / READ
+    sit in normal document flow: the active trace expands to show its
+    full item list, while the other two collapse to a single dim header
+    row. SVG branch lines are recomputed in JS to always point at each
+    header's live position — so nothing overlaps or ghosts through.
+-->
+<div class="trace-scene">
+    <div class="trace-composition">
+        <!-- =====================================================
+             SCROLL INDICATOR — which of the traces is active.
+             ===================================================== -->
+
+        <div class="scroll-indicator">
+            <div class="scroll-index">
+                <span class="scroll-current">01</span>
+                <span class="scroll-total">/ 0{visibleTraces.length}</span>
+            </div>
+
+            <div class="scroll-track">
+                <div class="scroll-fill"></div>
+            </div>
+
+            <div class="scroll-label">SCROLL</div>
+        </div>
+
+        <!-- =====================================================
+             IDENTITY — I, YASH letters (stacked), vertical rule.
+             Left side of the composition.
+             ===================================================== -->
+
+        <div class="identity">
+            <div class="identity-yash">
+                <span>Y</span>
+                <span>A</span>
+                <span>S</span>
+                <span>H</span>
+            </div>
+            <div class="identity-rule"></div>
+            <div class="identity-i">I</div>
+        </div>
+
+        <!-- =====================================================
+             NETWORK — SVG branching paths.
+             One shared junction, three bent branches. Path `d`
+             attributes are set entirely in JS so each branch always
+             points at its trace header's actual live position.
+             ===================================================== -->
+
+        <svg
+            class="id-network"
+            viewBox="0 0 1000 800"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+        >
+            <path class="stem" d="M 145 360 L 165 360"></path>
+
+            <circle class="junction-dot" cx="165" cy="360" r="4"></circle>
+
+            <path class="branch branch-write" data-trace="write" d=""></path>
+            <path class="branch branch-build" data-trace="build" d=""></path>
+            <path class="branch branch-read" data-trace="read" d=""></path>
+        </svg>
+
+        <!-- =====================================================
+             TRACE STACK — normal document flow, vertically centered.
+             The active trace expands fully; inactive traces collapse
+             to a single dim header row. JS toggles `.is-active`.
+             ===================================================== -->
+
+        <div class="trace-stack">
+            {
+                visibleTraces.map((trace, index) => {
+                    const items = itemsFor(trace);
+
+                    return (
+                        <section
+                            class:list={[
+                                "trace",
+                                `trace-${trace.id}`,
+                                index === 0 && "is-active",
+                            ]}
+                            data-trace={trace.id}
+                        >
+                            <header class="trace-header">
+                                <span class="trace-dot" />
+
+                                <div class="trace-title">
+                                    <h2>{trace.label}</h2>
+                                    <span class="trace-count">
+                                        {items.length}
+                                    </span>
+                                </div>
+
+                                <a
+                                    class="trace-view"
+                                    href={tracePath(trace.id)}
+                                >
+                                    VIEW ALL {trace.label.toUpperCase()} →
+                                </a>
+                            </header>
+
+                            <div class="trace-body">
+                                <div class="trace-rule" />
+
+                                <div class="trace-items">
+                                    {items.map((item, i) => (
+                                        <a class="trace-item" href={item.href}>
+                                            <span class="item-number">
+                                                0{i + 1}
+                                            </span>
+
+                                            <span class="item-content">
+                                                <span class="item-label">
+                                                    {item.label}
+                                                </span>
+
+                                                {item.meta && (
+                                                    <span class="item-meta">
+                                                        {item.meta}
+                                                    </span>
+                                                )}
+                                            </span>
+                                        </a>
+                                    ))}
+                                </div>
+                            </div>
+                        </section>
+                    );
+                })
+            }
+        </div>
+    </div>
+</div>
+
+<script>
+    /*
+     * Scroll-driven active trace + live branch tracking.
+     *
+     * The scene supplies 300vh of scroll distance. Scroll progress (0–1)
+     * maps to a discrete active index: 0 = WRITE, 1 = BUILD, 2 = READ.
+     * The active trace expands (full item list); the other two collapse
+     * to a dim header row — they never overlap or render on top of
+     * each other.
+     *
+     * Because collapsing/expanding changes each header's vertical
+     * position, the SVG branch paths are recomputed continuously for a
+     * short window after every state change, so a branch always points
+     * at its header's current, live position rather than a fixed
+     * percentage.
+     */
+
+    const scene = document.querySelector(".trace-scene") as HTMLElement | null;
+    const svg = document.querySelector<SVGSVGElement>(".id-network");
+    const traceStack = document.querySelector<HTMLElement>(".trace-stack");
+    const panels = [...document.querySelectorAll<HTMLElement>(".trace")];
+    const scrollCurrentEl = document.querySelector(".scroll-current");
+    const scrollFillEl = document.querySelector<HTMLElement>(".scroll-fill");
+
+    const branches = new Map<string, SVGPathElement>();
+    document.querySelectorAll<SVGPathElement>(".branch").forEach((branch) => {
+        const id = branch.dataset.trace;
+        if (id) branches.set(id, branch);
+    });
+
+    if (!scene || !svg || !traceStack || panels.length === 0) {
+        throw new Error("[YashGraph] required elements not found");
+    }
+
+    /* Junction point — fixed, tight against the I. */
+    const JUNCTION = { x: 165, y: 360 };
+
+    let activeIndex = 0;
+    let hoveredIndex: number | null = null;
+
+    function setActive(index: number) {
+        panels.forEach((panel, i) => {
+            panel.classList.toggle("is-active", i === index);
+        });
+
+        branches.forEach((branch, id) => {
+            const isActive = panels[index]?.dataset.trace === id;
+            branch.style.opacity = isActive ? "1" : "0";
+            branch.style.strokeWidth = isActive ? "1.8" : "1.4";
+        });
+
+        if (scrollCurrentEl) {
+            scrollCurrentEl.textContent = String(index + 1).padStart(2, "0");
+        }
+
+        trackBranchesDuring(650);
+    }
+
+    function updateFromScroll() {
+        if (!scene) return;
+
+        const rect = scene.getBoundingClientRect();
+        const sceneH = scene.offsetHeight;
+        const vh = window.innerHeight;
+
+        const progress = Math.max(0, Math.min(1, -rect.top / (sceneH - vh)));
+        const n = panels.length;
+
+        let index = Math.floor(progress * n);
+        index = Math.max(0, Math.min(n - 1, index));
+
+        if (scrollFillEl) {
+            scrollFillEl.style.height = `${progress * 100}%`;
+        }
+
+        if (index !== activeIndex) {
+            activeIndex = index;
+            if (hoveredIndex === null) setActive(index);
+        }
+    }
+
+    function updateBranches() {
+        if (!svg || !traceStack) return;
+
+        const svgRect = svg.getBoundingClientRect();
+        if (svgRect.width === 0 || svgRect.height === 0) return;
+
+        const stackRect = traceStack.getBoundingClientRect();
+
+        const toVBX = (clientX: number) =>
+            ((clientX - svgRect.left) / svgRect.width) * 1000;
+        const toVBY = (clientY: number) =>
+            ((clientY - svgRect.top) / svgRect.height) * 800;
+
+        const endX = toVBX(stackRect.left) - 14;
+
+        panels.forEach((panel) => {
+            const traceId = panel.dataset.trace;
+            const header = panel.querySelector<HTMLElement>(".trace-header");
+            const branch = traceId ? branches.get(traceId) : undefined;
+            if (!header || !branch) return;
+
+            const hRect = header.getBoundingClientRect();
+            const centerY = toVBY(hRect.top + hRect.height / 2);
+            const midX = JUNCTION.x + (endX - JUNCTION.x) * 0.45;
+
+            branch.setAttribute(
+                "d",
+                `M ${JUNCTION.x} ${JUNCTION.y} L ${midX} ${centerY} L ${endX} ${centerY}`,
+            );
+        });
+    }
+
+    /*
+     * Runs updateBranches() on every animation frame for `ms` milliseconds.
+     * Used after every active-state change so branches smoothly follow
+     * headers as they expand/collapse, rather than snapping at the end.
+     */
+    let trackingFrame: number | null = null;
+    let trackingUntil = 0;
+
+    function trackBranchesDuring(ms: number) {
+        trackingUntil = performance.now() + ms;
+        if (trackingFrame !== null) return;
+
+        const step = (now: number) => {
+            updateBranches();
+            if (now < trackingUntil) {
+                trackingFrame = requestAnimationFrame(step);
+            } else {
+                trackingFrame = null;
+            }
+        };
+        trackingFrame = requestAnimationFrame(step);
+    }
+
+    // Hover: temporarily preview a trace, revert to scroll state on leave.
+    panels.forEach((panel, i) => {
+        panel.addEventListener("mouseenter", () => {
+            hoveredIndex = i;
+            setActive(i);
+        });
+
+        panel.addEventListener("mouseleave", () => {
+            hoveredIndex = null;
+            setActive(activeIndex);
+        });
+    });
+
+    // Catch-all for layout shifts not tied to an explicit state change
+    // (font load, resize, etc).
+    const resizeObserver = new ResizeObserver(() => trackBranchesDuring(200));
+    resizeObserver.observe(traceStack);
+
+    window.addEventListener("resize", () => trackBranchesDuring(300));
+
+    // Initial render.
+    setActive(0);
+    updateFromScroll();
+    trackBranchesDuring(500);
+
+    window.addEventListener("scroll", updateFromScroll, { passive: true });
+</script>
+
+<style>
+    /* ============================================================
+     TRACE SCENE — provides 300vh of scroll distance.
+     Sticky composition inside stays at top: 0.
+     ============================================================ */
+
+    .trace-scene {
+        position: relative;
+        font-family: var(--font-mono);
+    }
+
+    /* ============================================================
+     STICKY COMPOSITION — the entire visual canvas.
+     Never moves. Only the trace stack's expand/collapse state changes.
+     ============================================================ */
+
+    .trace-composition {
+        position: relative;
+        height: auto;
+        overflow: visible;
+        background: var(--bg);
+    }
+
+    /* ============================================================
+     SCROLL INDICATOR — 01 / 03, progress track, SCROLL label.
+     ============================================================ */
+
+    .scroll-indicator {
+        position: absolute;
+
+        left: 5%;
+        top: 56px;
+        z-index: 6;
+
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .scroll-index {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+    }
+
+    .scroll-current {
+        color: var(--accent);
+        font-weight: 700;
+    }
+
+    .scroll-track {
+        position: relative;
+
+        width: 1px;
+        height: 40px;
+
+        background: rgba(20, 20, 20, 0.12);
+        overflow: hidden;
+    }
+
+    .scroll-fill {
+        position: absolute;
+
+        left: 0;
+        top: 0;
+
+        width: 100%;
+        height: 0%;
+
+        background: var(--accent);
+        transition: height 120ms linear;
+    }
+
+    .scroll-label {
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 8px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+    }
+
+    /* ============================================================
+     IDENTITY — YASH letters, rule, I
+     Left side of the composition.
+     ============================================================ */
+
+    .identity {
+        position: absolute;
+
+        /*
+         * Starts at 5% from the left edge of the right column.
+         * Closes the dead space between identity and trace-stack.
+         * Width is auto — sized by its children (YASH, rule, I).
+         */
+        left: 5%;
+        top: 0;
+
+        width: auto;
+        height: 100%;
+        z-index: 5;
+    }
+
+    .identity-yash {
+        position: absolute;
+
+        left: 10px;
+        top: 50%;
+
+        transform: translateY(-50%);
+
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+
+        color: var(--accent);
+
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+
+        user-select: none;
+    }
+
+    .identity-rule {
+        position: absolute;
+
+        left: 28px;
+        top: 50%;
+
+        transform: translateY(-50%);
+
+        width: 1px;
+        height: clamp(100px, 16vh, 160px);
+
+        background: var(--accent);
+    }
+
+    .identity-i {
+        position: absolute;
+
+        left: 60px;
+        top: 50%;
+
+        transform: translateY(-50%) scaleX(0.68);
+        transform-origin: left center;
+
+        color: var(--accent);
+
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 180px;
+        font-weight: 900;
+        line-height: 0.62;
+        letter-spacing: -0.085em;
+
+        -webkit-text-stroke: 1.5px var(--accent);
+
+        user-select: none;
+
+        z-index: 2;
+    }
+
+    /* ============================================================
+     SVG NETWORK — branching paths from I to trace headers.
+     One stem + three bent branches sharing a junction.
+     Path `d` attributes are set entirely in JS.
+     ============================================================ */
+
+    .id-network {
+        position: absolute;
+
+        top: 0;
+        left: 0;
+
+        width: 100%;
+        height: 100%;
+
+        pointer-events: none;
+        overflow: visible;
+
+        z-index: 3;
+    }
+
+    .stem {
+        fill: none;
+        stroke: var(--accent);
+        stroke-width: 1.4;
+        vector-effect: non-scaling-stroke;
+        opacity: 0.4;
+    }
+
+    .junction-dot {
+        fill: var(--accent);
+    }
+
+    .branch {
+        fill: none;
+        stroke: var(--accent);
+        stroke-width: 1.4;
+        vector-effect: non-scaling-stroke;
+
+        /*
+         * Inactive branches are fully hidden, not just dimmed.
+         * Only the active trace's branch renders. JS toggles opacity.
+         */
+        opacity: 0;
+
+        transition:
+            opacity 280ms ease,
+            stroke-width 280ms ease;
+    }
+
+    /* ============================================================
+     TRACE STACK — normal document flow, vertically centered.
+     The active trace expands; the other two collapse to a header row.
+     ============================================================ */
+
+    .trace-stack {
+        position: absolute;
+
+        left: 20%;
+        right: 3%;
+        top: 50%;
+
+        transform: translateY(-50%);
+
+        z-index: 4;
+    }
+
+    .trace {
+        position: relative;
+
+        padding: 20px 0;
+
+        border-bottom: 1px solid rgba(20, 20, 20, 0.06);
+    }
+
+    .trace:first-child {
+        padding-top: 0;
+    }
+
+    .trace:last-child {
+        border-bottom: none;
+        padding-bottom: 0;
+    }
+
+    /* ============================================================
+     TRACE HEADER — always visible; dims when its trace is inactive.
+     ============================================================ */
+
+    .trace-header {
+        display: flex;
+        align-items: center;
+
+        gap: 14px;
+
+        opacity: 0.32;
+
+        transition: opacity 320ms ease;
+    }
+
+    .trace.is-active .trace-header {
+        opacity: 1;
+    }
+
+    .trace-dot {
+        flex-shrink: 0;
+
+        width: 6px;
+        height: 6px;
+
+        border-radius: 50%;
+        background: var(--muted);
+
+        transition:
+            background 320ms ease,
+            box-shadow 320ms ease;
+    }
+
+    .trace.is-active .trace-dot {
+        background: var(--accent);
+        box-shadow: 0 0 0 4px rgba(36, 88, 211, 0.14);
+    }
+
+    .trace-title {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+    }
+
+    .trace-header h2 {
+        margin: 0;
+
+        color: var(--text);
+
+        font-family: var(--font-mono);
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+    }
+
+    .trace-count {
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 9px;
+    }
+
+    .trace-view {
+        flex-shrink: 0;
+        margin-left: auto;
+
+        color: var(--accent);
+
+        font-family: var(--font-mono);
+        font-size: 8px;
+        letter-spacing: 0.08em;
+
+        text-decoration: none;
+        white-space: nowrap;
+    }
+
+    .trace-view:hover {
+        text-decoration: underline;
+        text-underline-offset: 3px;
+    }
+
+    /* ============================================================
+     TRACE BODY — rule + items, collapses/expands as one unit.
+     ============================================================ */
+
+    .trace-body {
+        overflow: hidden;
+
+        max-height: 0;
+        opacity: 0;
+
+        transition:
+            max-height 550ms cubic-bezier(0.22, 1, 0.36, 1),
+            opacity 350ms ease;
+    }
+
+    .trace.is-active .trace-body {
+        max-height: 900px;
+        opacity: 1;
+    }
+
+    .trace-rule {
+        width: 100%;
+        height: 1px;
+        margin: 16px 0 18px;
+        background: var(--accent);
+    }
+
+    /* ============================================================
+     ITEMS — full-width horizontal rows, never three columns.
+     ============================================================ */
+
+    .trace-items {
+        width: 100%;
+    }
+
+    .trace:not(.is-active) .trace-items {
+        pointer-events: none;
+    }
+
+    .trace-item {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        align-items: baseline;
+
+        min-height: 40px;
+        padding: 8px 0;
+
+        border-bottom: 1px solid rgba(20, 20, 20, 0.09);
+
+        color: var(--text);
+        text-decoration: none;
+
+        transition: color 160ms ease;
+    }
+
+    .trace-item:hover {
+        color: var(--accent);
+    }
+
+    .item-number {
+        color: var(--accent);
+        font-family: var(--font-mono);
+        font-size: 8px;
+        font-weight: 600;
+    }
+
+    .item-content {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 20px;
+        min-width: 0;
+    }
+
+    .item-label {
+        min-width: 0;
+
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+
+        font-family: var(--font-mono);
+        font-size: 15px;
+        font-weight: 500;
+        line-height: 1.3;
+        letter-spacing: -0.01em;
+    }
+
+    .item-meta {
+        flex-shrink: 0;
+
+        color: var(--muted);
+
+        font-family: var(--font-mono);
+        font-size: 8px;
+        font-weight: 400;
+        letter-spacing: 0;
+
+        white-space: nowrap;
+    }
+
+    /* ============================================================
+     TABLET
+     ============================================================ */
+
+    @media (max-width: 1100px) {
+        .identity-i {
+            font-size: clamp(100px, 10vw, 140px);
+        }
+
+        .trace-stack {
+            left: 24%;
+            right: 3%;
+        }
+    }
+
+    /* ============================================================
+     MOBILE — abandon sticky/scroll-driven layout, show everything
+     expanded and stacked normally.
+     ============================================================ */
+
+    @media (max-width: 720px) {
+        .trace-scene {
+            height: auto;
+        }
+
+        .trace-composition {
+            position: relative;
+            height: auto;
+            overflow: visible;
+        }
+
+        .scroll-indicator {
+            display: none;
+        }
+
+        .identity {
+            position: relative;
+            width: 100%;
+            height: 260px;
+            border-bottom: 1px solid var(--accent);
+        }
+
+        .identity-i {
+            font-size: 140px;
+        }
+
+        .id-network {
+            display: none;
+        }
+
+        .trace-stack {
+            position: relative;
+            left: auto;
+            right: auto;
+            top: auto;
+            transform: none;
+        }
+
+        .trace {
+            padding: 28px 24px;
+            border-bottom: 1px solid var(--accent);
+        }
+
+        .trace-header {
+            opacity: 1 !important;
+        }
+
+        .trace-body {
+            max-height: none !important;
+            opacity: 1 !important;
+        }
+
+        .item-label {
+            font-size: 14px;
+            white-space: normal;
+        }
+    }
+</style>

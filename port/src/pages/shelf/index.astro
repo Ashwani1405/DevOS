@@ -1,0 +1,32 @@
+---
+import Layout from "../../layouts/Base.astro";
+import Section from "../../components/Section.astro";
+import ShelfList from "../../components/ShelfList.astro";
+import { getShelf } from "../../lib/content/index";
+import { site } from "../../data/site";
+
+const items = await getShelf();
+
+const groups = [
+  { title: "Currently reading", status: "currently reading" },
+  { title: "Recently read", status: "recently read" },
+  { title: "Read", status: "read" },
+  { title: "Want to read", status: "want to read" },
+] as const;
+---
+
+<Layout title="Shelf" description="Books, papers, and other things I'm reading.">
+  <div>
+    <h1>Shelf</h1>
+    <p class="muted">Books, papers, and articles — the things I read.</p>
+
+    {groups.map((group) => {
+      const inGroup = items.filter((i) => i.status === group.status);
+      return inGroup.length > 0 ? (
+        <Section title={group.title}>
+          <ShelfList items={inGroup} />
+        </Section>
+      ) : null;
+    })}
+  </div>
+</Layout>

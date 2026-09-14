@@ -1,0 +1,38 @@
+---
+import type { LoadedWork } from "../lib/content/index";
+
+interface Props {
+  work: LoadedWork;
+}
+
+const { work } = Astro.props;
+const href = `/work/${work.slug}`;
+const dates = `${work.startDate} — ${work.endDate ?? "Present"}`;
+---
+
+<li class="work-item">
+  <div class="work-meta">
+    <span class="work-dates">{dates}</span>
+    {work.location ? (
+      <span class="work-location">
+        {work.location}
+        {work.remote ? " · Remote" : ""}
+      </span>
+    ) : null}
+  </div>
+  <h3 class="work-heading">
+    <a href={href}>{work.title}</a>
+  </h3>
+  <p class="work-company">{work.company}</p>
+  {work.description ? <p class="work-desc">{work.description}</p> : null}
+  {work.bullets.length > 0 ? (
+    <ul class="work-bullets">
+      {work.bullets.map((bullet) => (
+        <li>{bullet}</li>
+      ))}
+    </ul>
+  ) : null}
+  {work.technologies.length > 0 ? (
+    <p class="work-tech">{work.technologies.join(" · ")}</p>
+  ) : null}
+</li>

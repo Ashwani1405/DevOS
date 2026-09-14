@@ -1,0 +1,102 @@
+---
+interface Props {
+    slug: string;
+    title: string;
+    date: Date;
+    readingTime: string;
+    excerpt: string;
+    tags: string[];
+}
+
+const { slug, title, date, readingTime, excerpt, tags } = Astro.props;
+
+const formattedDate = date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+});
+---
+
+<li class="writing-item">
+    <a href={`/writing/${slug}`} class="writing-link">
+        <div class="writing-meta">
+            <time class="writing-date" datetime={date.toISOString()}>
+                {formattedDate}
+            </time>
+            <span class="writing-sep">·</span>
+            <span class="writing-time">{readingTime}</span>
+        </div>
+        <h2 class="writing-title">{title}</h2>
+        {excerpt && <p class="writing-excerpt">{excerpt}</p>}
+        {tags.length > 0 && (
+            <div class="writing-tags">
+                {tags.map((tag) => (
+                    <span class="writing-tag">{tag}</span>
+                ))}
+            </div>
+        )}
+    </a>
+</li>
+
+<style>
+    .writing-item {
+        list-style: none;
+        border-bottom: 1px solid var(--rule-subtle);
+    }
+
+    .writing-link {
+        display: block;
+        padding: 1.25rem 0;
+        text-decoration: none;
+        color: inherit;
+        transition: color 150ms ease;
+    }
+
+    .writing-link:hover {
+        color: var(--accent);
+    }
+
+    .writing-meta {
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin-bottom: 0.35rem;
+    }
+
+    .writing-sep {
+        margin: 0 0.3em;
+    }
+
+    .writing-title {
+        font-family: var(--font-serif);
+        font-size: 1.25rem;
+        font-weight: 400;
+        line-height: 1.35;
+        margin: 0;
+    }
+
+    .writing-excerpt {
+        font-size: 0.9rem;
+        color: var(--muted);
+        margin: 0.3rem 0 0;
+        line-height: 1.5;
+    }
+
+    .writing-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-top: 0.5rem;
+    }
+
+    .writing-tag {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        background: var(--bg-secondary);
+        padding: 0.15em 0.5em;
+        border-radius: 3px;
+    }
+</style>

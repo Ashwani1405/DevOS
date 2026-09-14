@@ -1,0 +1,154 @@
+/* ---------- CSS Reset ---------- */
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+body,
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+blockquote,
+dl,
+dd {
+	margin: 0;
+	padding: 0;
+}
+
+ul[role="list"],
+ol[role="list"] {
+	list-style: none;
+}
+
+html {
+	scroll-behavior: smooth;
+}
+
+body {
+	min-height: 100vh;
+	text-rendering: optimizeSpeed;
+	line-height: 1.5;
+}
+
+a {
+	color: inherit;
+}
+
+a:not([class]) {
+	text-decoration-skip-ink: auto;
+}
+
+img,
+picture {
+	max-width: 100%;
+	display: block;
+}
+
+/* ---------- Design tokens ---------- */
+:root {
+	/* Editorial Palette */
+	--bg-primary: #FAFAF7;
+	--bg-secondary: #f2f2ef;
+	--ink: #111111;
+	--muted: #737373;
+	--accent: #2458D3;
+	--accent-soft: #E9EEFF;
+
+	/* Structural */
+	--rule-thin: 1px solid var(--accent);
+	--rule-subtle: 1px solid rgba(36, 88, 211, 0.15);
+
+	/* Typography */
+	--font-sans: "Inter", "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+	--font-serif: "Georgia", "Times New Roman", ui-serif, serif;
+	--font-mono: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+
+	/* GitHub Activity / Heatmap */
+	--contrib-0: #e5e5e5;
+	--contrib-1: #b8cbf2;
+	--contrib-2: #84a5ec;
+	--contrib-3: #4f7fe5;
+	--contrib-4: #2458D3;
+}
+
+/* ---------- Global Styles ---------- */
+body {
+	background-color: var(--bg-primary);
+	color: var(--ink);
+	font-family: var(--font-sans);
+	font-size: 16px;
+	line-height: 1.6;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	overflow-x: hidden;
+}
+
+::selection {
+	background-color: var(--accent-soft);
+	color: var(--accent);
+}
+
+/* Layout Utilities */
+.container {
+	max-width: 1400px;
+	margin: 0 auto;
+	padding: 0 2rem;
+}
+
+@media (max-width: 768px) {
+	.container {
+		padding: 0 1.25rem;
+	}
+}
+
+/* Typography Utilities */
+.editorial-title {
+	font-family: var(--font-serif);
+	font-weight: 400;
+	letter-spacing: -0.02em;
+}
+
+.mono-meta {
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+/* Structural Rules */
+.hr-blue {
+	border: none;
+	border-top: var(--rule-thin);
+	margin: 2rem 0;
+}
+
+.hr-subtle {
+	border: none;
+	border-top: var(--rule-subtle);
+	margin: 2rem 0;
+}
+
+/* Header */
+.site-header {
+	padding: 1.5rem 0;
+	border-bottom: var(--rule-thin);
+}
+
+/* Footer */
+.site-footer {
+	padding: 3rem 0;
+	margin-top: 6rem;
+	border-top: var(--rule-thin);
+}
+
+/* Remove all generic dark mode/card styles */
+.card, .glass-card {
+	background: transparent;
+	border: none;
+	box-shadow: none;
+}

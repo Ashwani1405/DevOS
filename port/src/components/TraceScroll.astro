@@ -1,0 +1,320 @@
+---
+import type { GraphData } from "../lib/graph/buildGraph";
+
+interface Props {
+    graph: GraphData;
+    traces: {
+        id: string;
+        label: string;
+        visible?: boolean;
+    }[];
+}
+
+const { graph, traces } = Astro.props;
+
+const VIEW_ALL_LABELS: Record<string, string> = {
+    write: "VIEW ALL WRITING",
+    build: "VIEW ALL PROJECTS",
+    read: "VIEW ALL READING",
+};
+
+const traceData = traces
+    .filter((trace) => trace.visible !== false)
+    .map((trace) => ({
+        id: trace.id,
+        label: trace.label,
+        items: graph.nodes.filter(
+            (node) => node.trace === trace.id && node.kind === "item",
+        ),
+        viewAll: VIEW_ALL_LABELS[trace.id] ?? "VIEW ALL",
+    }));
+---
+
+<div class="page-stack" data-page-stack>
+    {
+        traceData.map((trace, index) => (
+            <section
+                class:list={["page", index === 0 && "is-active"]}
+                data-page={trace.id}
+                aria-hidden={index === 0 ? "false" : "true"}
+            >
+                <header class="page-title" data-page-title>
+                    {trace.label}
+                </header>
+
+                <div
+                    class="page-viewport"
+                    data-page-viewport
+                    data-lenis-prevent
+                >
+                    {
+                        trace.items.map((item) => (
+                            <a href={item.href} class="page-item" data-page-item>
+                                <span class="page-item-label">
+                                    {item.label}
+                                </span>
+                                {item.meta && (
+                                    <span class="page-item-meta">
+                                        {item.meta}
+                                    </span>
+                                )}
+                            </a>
+                        ))
+                    }
+
+                    <a href={`/${trace.id}`} class="page-view-all">
+                        {trace.viewAll}
+                    </a>
+                </div>
+            </section>
+        ))
+    }
+</div>
+
+<script>
+    const root = document.querySelector<HTMLElement>("[data-page-stack]");
+
+    if (root) {
+        const pages = Array.from(
+            root.querySelectorAll<HTMLElement>("[data-page]"),
+        );
+
+        const ids = pages.map((page) => page.dataset.page ?? "");
+
+        const state = {
+            active: 0,
+            transitioning: false,
+        };
+
+        function viewportOf(page: HTMLElement) {
+            return page.querySelector<HTMLElement>("[data-page-viewport]");
+        }
+
+        // Switch which page is "current" for a11y and scroll reset. The visible
+        // flip itself is driven by ConnectorRotator — here we only follow it.
+        function showPage(index: number, forward: boolean) {
+            pages.forEach((page, i) => {
+                const active = i === index;
+                page.classList.toggle("is-active", active);
+                page.setAttribute("aria-hidden", active ? "false" : "true");
+            });
+
+            const viewport = viewportOf(pages[index]);
+            if (!viewport) return;
+
+            // Fresh scroll position for the newly shown page.
+            requestAnimationFrame(() => {
+                viewport.scrollTop = forward ? 0 : viewport.scrollHeight;
+            });
+        }
+
+        function atBoundary(viewport: HTMLElement, direction: number): boolean {
+            const atBottom =
+                viewport.scrollTop + viewport.clientHeight >=
+                viewport.scrollHeight - 3;
+            const atTop = viewport.scrollTop <= 3;
+            return direction > 0 ? atBottom : atTop;
+        }
+
+        function emitBoundary(index: number, direction: number) {
+            const next = index + direction;
+            if (next < 0 || next >= ids.length) return;
+
+            state.transitioning = true;
+
+            root.dispatchEvent(
+                new CustomEvent(
+                    direction > 0 ? "trace:next" : "trace:previous",
+                    {
+                        bubbles: true,
+                        detail: {
+                            from: ids[index],
+                            to: ids[next],
+                        },
+                    },
+                ),
+            );
+        }
+
+        // Native scroll per page; intercept only at a page boundary.
+        pages.forEach((page, index) => {
+            const viewport = viewportOf(page);
+            if (!viewport) return;
+
+            viewport.addEventListener(
+                "wheel",
+                (event) => {
+                    if (state.transitioning) {
+                        event.preventDefault();
+                        return;
+                    }
+
+                    const dir = event.deltaY > 0 ? 1 : -1;
+
+                    if (page.classList.contains("is-active") && atBoundary(viewport, dir)) {
+                        event.preventDefault();
+                        emitBoundary(index, dir);
+                    }
+                },
+                { passive: false },
+            );
+        });
+
+        // ConnectorRotator finished the page flip -> adopt the new page.
+        document.addEventListener("trace:rotated", ((event: CustomEvent) => {
+            const next = event.detail?.index;
+            if (typeof next !== "number") return;
+
+            const forward = next > state.active;
+
+            state.active = next;
+            showPage(next, forward);
+            state.transitioning = false;
+        }) as EventListener);
+    }
+</script>
+
+<style>
+    .page-stack {
+        position: absolute;
+        left: 150px;
+        right: 2%;
+        top: 60px;
+        bottom: 40px;
+
+        perspective: 1400px;
+        perspective-origin: 50% 50%;
+
+        transform-style: preserve-3d;
+    }
+
+    /*
+     * Each section is an editorial page hinged at the junction left of it.
+     * The page turns about its left edge (the fixed hinge).
+     */
+    .page {
+        position: absolute;
+        inset: 0;
+
+        display: flex;
+        flex-direction: column;
+
+        transform-origin: 0 50%;
+        transform-style: preserve-3d;
+        backface-visibility: visible;
+
+        will-change: transform;
+
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .page.is-active,
+    .page.is-visible {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .page-title {
+        flex: 0 0 auto;
+
+        font-family: var(--font-mono);
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+
+        color: var(--accent);
+    }
+
+    .page-viewport {
+        flex: 1 1 auto;
+        min-height: 0;
+
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: none;
+    }
+
+    .page-viewport::-webkit-scrollbar {
+        display: none;
+    }
+
+    .page-item {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 24px;
+
+        padding: 10px 0;
+
+        border-bottom: 1px solid rgba(36, 88, 211, 0.15);
+
+        color: var(--ink);
+        text-decoration: none;
+
+        font-family: var(--font-mono);
+        font-size: 15px;
+        line-height: 1.4;
+    }
+
+    .page-item-label {
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .page-item-meta {
+        flex: 0 0 auto;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.04em;
+    }
+
+    .page-item:hover .page-item-label {
+        color: var(--accent);
+    }
+
+    .page-view-all {
+        display: inline-block;
+        margin-top: 20px;
+
+        font-family: var(--font-mono);
+        font-size: 9px;
+        letter-spacing: 0.06em;
+
+        color: var(--muted);
+        text-decoration: none;
+    }
+
+    .page-view-all:hover {
+        color: var(--accent);
+    }
+
+    @media (max-width: 800px) {
+        .page-stack {
+            position: relative;
+            left: auto;
+            right: auto;
+            top: auto;
+            bottom: auto;
+
+            margin: 28px 24px 0;
+        }
+
+        .page {
+            position: relative;
+            inset: auto;
+        }
+
+        .page:not(.is-active) {
+            display: none;
+        }
+
+        .page-viewport {
+            max-height: 360px;
+        }
+    }
+</style>

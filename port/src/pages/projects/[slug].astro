@@ -1,0 +1,58 @@
+---
+import Layout from "../../layouts/Base.astro";
+import Section from "../../components/Section.astro";
+import { getCollection, render } from "astro:content";
+
+export async function getStaticPaths() {
+  const projects = (await getCollection("projects")).filter(
+    (p) => p.data.draft !== true,
+  );
+  return projects.map((project) => ({
+    params: { slug: (project.data.slug as string) || project.id },
+    props: { project },
+  }));
+}
+
+const { project } = Astro.props;
+const { Content } = await render(project);
+---
+
+<Layout
+  title={project.data.title}
+  description={project.data.description}
+>
+  <article>
+    <h1>{project.data.title}</h1>
+    <p>{project.data.longDescription || project.data.description}</p>
+
+    <Section title="Metadata">
+      <ul>
+        <li>Year: {project.data.year}</li>
+        <li>Status: {project.data.status}</li>
+        <li>Technologies: {project.data.technologies.join(", ")}</li>
+        {project.data.github ? (
+          <li>
+            <a href={project.data.github} target="_blank" rel="noopener noreferrer">
+              Source on GitHub
+            </a>
+          </li>
+        ) : null}
+        {project.data.live ? (
+          <li>
+            <a href={project.data.live} target="_blank" rel="noopener noreferrer">
+              Live site
+            </a>
+          </li>
+        ) : null}
+      </ul>
+    </Section>
+
+    <div class="project-case">
+      <Content />
+    </div>
+
+    <p>
+      <a href="/projects">← All projects</a>
+    </p>
+  </article>
+</Layout>

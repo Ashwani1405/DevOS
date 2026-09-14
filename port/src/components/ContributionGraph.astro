@@ -1,0 +1,219 @@
+---
+import type { ContributionWeek } from "../lib/github/types";
+
+interface Props {
+	weeks: ContributionWeek[];
+	totalContributions: number;
+}
+
+const { weeks, totalContributions } = Astro.props;
+
+// Build month labels from the first day of each week.
+const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const monthLabels: { label: string; col: number }[] = [];
+let lastMonth = -1;
+weeks.forEach((week, i) => {
+	if (week.days.length > 0) {
+		const month = new Date(week.days[0].date).getMonth();
+		if (month !== lastMonth) {
+			monthLabels.push({ label: monthNames[month], col: i });
+			lastMonth = month;
+		}
+	}
+});
+
+const dayLabels = ["", "Mo", "", "We", "", "Fr", ""];
+---
+
+<div class="contrib-card card">
+	<div class="contrib-header">
+		<span class="contrib-count">
+			{totalContributions.toLocaleString()} in the last year
+		</span>
+	</div>
+
+	<div class="contrib-graph-scroll">
+		<div class="contrib-month-row">
+			<span class="contrib-day-spacer"></span>
+			<div class="contrib-months">
+				{monthLabels.map((m) => (
+					<span class="contrib-month" style={`grid-column: ${m.col + 1}`}>
+						{m.label}
+					</span>
+				))}
+			</div>
+		</div>
+
+		<div class="contrib-graph">
+			<div class="contrib-day-labels" aria-hidden="true">
+				{dayLabels.map((label) => (
+					<span class="contrib-label">{label}</span>
+				))}
+			</div>
+			<div class="contrib-weeks">
+				{weeks.map((week) => (
+					<div class="contrib-week">
+						{week.days.map((day) => (
+							<span
+								class={`contrib-cell level-${day.level}`}
+								title={`${day.date}: ${day.count} contribution${day.count === 1 ? "" : "s"}`}
+							></span>
+						))}
+					</div>
+				))}
+			</div>
+		</div>
+	</div>
+
+	<div class="contrib-legend">
+		<span class="contrib-legend-label">LESS</span>
+		<span class="contrib-cell level-0 legend-cell"></span>
+		<span class="contrib-cell level-1 legend-cell"></span>
+		<span class="contrib-cell level-2 legend-cell"></span>
+		<span class="contrib-cell level-3 legend-cell"></span>
+		<span class="contrib-cell level-4 legend-cell"></span>
+		<span class="contrib-legend-label">MORE</span>
+	</div>
+</div>
+
+<style>
+	.contrib-card {
+		overflow: hidden;
+	}
+
+	.contrib-header {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		margin-bottom: 0.75rem;
+	}
+
+	.contrib-count {
+		font-family: var(--font-mono);
+		font-size: 0.75rem;
+		letter-spacing: 0.06em;
+		color: var(--text-muted);
+	}
+
+	.contrib-graph-scroll {
+		overflow-x: auto;
+		padding-bottom: 0.5rem;
+	}
+
+	.contrib-month-row {
+		display: flex;
+		gap: 0.25rem;
+		margin-bottom: 0.25rem;
+	}
+
+	.contrib-day-spacer {
+		width: 20px;
+		flex-shrink: 0;
+	}
+
+	.contrib-months {
+		display: grid;
+		grid-template-columns: repeat(53, 1fr);
+		flex: 1;
+		min-width: max-content;
+	}
+
+	.contrib-month {
+		font-family: var(--font-mono);
+		font-size: 0.5625rem;
+		color: var(--text-dim);
+		letter-spacing: 0.05em;
+	}
+
+	.contrib-graph {
+		display: flex;
+		gap: 0.25rem;
+		min-width: max-content;
+	}
+
+	.contrib-day-labels {
+		display: grid;
+		grid-template-rows: repeat(7, 1fr);
+		gap: 2px;
+		width: 20px;
+		flex-shrink: 0;
+	}
+
+	.contrib-label {
+		font-family: var(--font-mono);
+		font-size: 0.5625rem;
+		line-height: 1;
+		color: var(--text-dim);
+		display: flex;
+		align-items: center;
+		min-height: 10px;
+	}
+
+	.contrib-weeks {
+		display: flex;
+		gap: 2px;
+	}
+
+	.contrib-week {
+		display: grid;
+		grid-template-rows: repeat(7, 1fr);
+		gap: 2px;
+	}
+
+	.contrib-cell {
+		width: 10px;
+		height: 10px;
+		border-radius: 2px;
+		display: block;
+		transition: opacity 0.15s ease;
+	}
+
+	.contrib-cell:hover {
+		opacity: 0.8;
+		outline: 1px solid var(--accent);
+		outline-offset: 1px;
+	}
+
+	/* Indigo spectrum */
+	.contrib-cell.level-0 {
+		background: var(--contrib-0);
+	}
+	.contrib-cell.level-1 {
+		background: var(--contrib-1);
+	}
+	.contrib-cell.level-2 {
+		background: var(--contrib-2);
+	}
+	.contrib-cell.level-3 {
+		background: var(--contrib-3);
+	}
+	.contrib-cell.level-4 {
+		background: var(--contrib-4);
+	}
+
+	/* Legend */
+	.contrib-legend {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 3px;
+		margin-top: 0.75rem;
+	}
+
+	.contrib-legend-label {
+		font-family: var(--font-mono);
+		font-size: 0.5625rem;
+		letter-spacing: 0.1em;
+		color: var(--text-dim);
+		margin: 0 4px;
+	}
+
+	.legend-cell {
+		width: 10px;
+		height: 10px;
+	}
+	.legend-cell:hover {
+		outline: none;
+		opacity: 1;
+	}
+</style>

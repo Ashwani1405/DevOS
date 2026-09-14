@@ -1,0 +1,61 @@
+---
+import type { RecentRepository } from "../lib/github/types";
+
+interface Props {
+  repositories: RecentRepository[];
+  /** Limit shown; data layer can fetch more. */
+  limit?: number;
+}
+
+const { repositories, limit = 10 } = Astro.props;
+const shown = repositories.slice(0, limit);
+---
+
+{
+  shown.length === 0 ? (
+    <p class="muted">No recent repositories found.</p>
+  ) : (
+    <ul class="repo-list">
+      {shown.map((repo) => (
+        <li class="repo-item">
+          <div class="repo-meta">
+            <span class="repo-name">
+              <a href={repo.url} target="_blank" rel="noopener noreferrer">
+                {repo.name}
+              </a>
+            </span>
+            {repo.language ? <span class="repo-language">{repo.language}</span> : null}
+          </div>
+          {repo.description ? <p class="repo-desc">{repo.description}</p> : null}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+<style>
+  .repo-item {
+    padding: 0.5rem 0;
+  }
+
+  .repo-meta {
+    display: flex;
+    gap: 0.75rem;
+    align-items: baseline;
+  }
+
+  .repo-name {
+    font-weight: 500;
+  }
+
+  .repo-language {
+    font-size: 0.8125rem;
+    color: var(--muted);
+  }
+
+  .repo-desc {
+    margin: 0.15rem 0 0;
+    color: var(--muted);
+    font-size: 0.9375rem;
+  }
+</style>

@@ -1,0 +1,32 @@
+---
+import WritingItem from "./WritingItem.astro";
+
+interface Props {
+	articles: Array<{
+		id: string;
+		data: {
+			slug?: string;
+			title: string;
+			date: Date;
+			readingTime: string;
+			description: string;
+			tags: string[];
+		};
+	}>;
+}
+
+const { articles } = Astro.props;
+---
+
+<ul class="writing-list">
+  {articles.map((article) => (
+    <WritingItem
+      slug={(article.data.slug as string) || article.id}
+      title={article.data.title}
+      date={article.data.date}
+      readingTime={article.data.readingTime}
+      excerpt={article.data.description}
+      tags={article.data.tags}
+    />
+  ))}
+</ul>

@@ -1,0 +1,19 @@
+{
+  "name": "port",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/sync-content.mjs && astro dev",
+    "build": "node scripts/sync-content.mjs && astro build",
+    "sync": "node scripts/sync-content.mjs",
+    "sync:obsidian": "node scripts/import-obsidian.mjs && node scripts/sync-content.mjs",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "astro": "^7.2.10",
+    "gsap": "^3.15.0",
+    "lenis": "^1.3.26"
+  }
+}

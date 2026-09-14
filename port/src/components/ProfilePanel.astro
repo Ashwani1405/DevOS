@@ -1,0 +1,144 @@
+---
+/*
+ * ProfilePanel — sticky left column.
+ *
+ * Moved verbatim out of index.astro during the component-separation
+ * refactor. Content and styles are unchanged; only the file location
+ * moved.
+ */
+---
+
+<aside class="profile-col">
+    <div class="profile-name">YASH /</div>
+
+    <div class="profile-role">
+        SOFTWARE<br />
+        ENGINEER<br />
+        BUILDING<br />
+        BACKEND<br />
+        SYSTEMS.
+    </div>
+
+    <div class="profile-rule"></div>
+
+    <p class="profile-bio">
+        I write about<br />
+        concurrency,<br />
+        distributed systems,<br />
+        and the stuff I build.
+    </p>
+
+    <div class="profile-rule"></div>
+
+    <p class="profile-location">DELHI, INDIA</p>
+
+    <div class="profile-rule"></div>
+
+    <div class="profile-currently">
+        <div class="profile-currently-label">CURRENTLY</div>
+
+        <p>
+            BUILDING,<br />
+            READING, LIFTING,<br />
+            LEARNING.
+        </p>
+    </div>
+</aside>
+
+<style>
+    .profile-col {
+        position: sticky;
+        top: 0;
+
+        height: 100vh;
+        align-self: start;
+
+        padding: 42px 44px 50px 30px;
+
+        border-right: 1px solid var(--accent);
+
+        overflow: hidden;
+
+        z-index: 10;
+    }
+
+    .profile-name {
+        color: var(--accent);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+    }
+
+    .profile-role {
+        margin-top: 52px;
+
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 15px;
+        font-weight: 700;
+        line-height: 1.55;
+        letter-spacing: 0.01em;
+    }
+
+    .profile-rule {
+        width: 100%;
+        height: 1px;
+        margin: 28px 0 30px;
+        background: var(--accent);
+    }
+
+    .profile-bio {
+        margin: 0;
+        color: var(--muted);
+        font-family: var(--font-sans);
+        font-size: 14px;
+        line-height: 1.65;
+        letter-spacing: -0.005em;
+    }
+
+    .profile-location {
+        margin: 0;
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.06em;
+    }
+
+    .profile-currently-label {
+        color: var(--accent);
+        font-family: var(--font-mono);
+        font-size: 8px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+    }
+
+    .profile-currently p {
+        margin: 12px 0 0;
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        line-height: 1.7;
+        letter-spacing: -0.005em;
+    }
+
+    @media (max-width: 720px) {
+        .profile-col {
+            position: relative;
+            top: auto;
+
+            width: 100%;
+            height: auto;
+
+            border-right: 0;
+            border-bottom: 1px solid var(--accent);
+
+            overflow-y: visible;
+        }
+
+        .profile-role {
+            margin-top: 36px;
+        }
+    }
+</style>

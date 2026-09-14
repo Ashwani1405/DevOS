@@ -1,0 +1,32 @@
+---
+import Layout from "../layouts/Base.astro";
+import Section from "../components/Section.astro";
+import { site } from "../data/site";
+---
+
+<Layout title="Contact" description="How to get in touch with Yash Bahuguna.">
+  <div>
+    <h1>Contact</h1>
+    <p>Get in touch — I'm most responsive by email.</p>
+
+    <Section title="Email">
+      <p>
+        <a href={`mailto:${site.email}`}>{site.email}</a>
+      </p>
+    </Section>
+
+    <Section title="Elsewhere">
+      <ul>
+        <li>
+          <a href={site.social.github} target="_blank" rel="noopener noreferrer">GitHub</a>
+        </li>
+        <li>
+          <a href={site.social.linkedin} target="_blank" rel="noopener noreferrer">LinkedIn</a>
+        </li>
+        <li>
+          <a href={site.social.resume}>Resume</a>
+        </li>
+      </ul>
+    </Section>
+  </div>
+</Layout>

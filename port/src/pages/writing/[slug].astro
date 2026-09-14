@@ -1,0 +1,47 @@
+---
+import Layout from "../../layouts/Base.astro";
+import { getCollection, render } from "astro:content";
+import { formatDate } from "../../lib/formatDate";
+
+export async function getStaticPaths() {
+  const writing = (await getCollection("writing")).filter(
+    (a) => a.data.status !== "draft",
+  );
+  return writing.map((article) => ({
+    params: { slug: (article.data.slug as string) || article.id },
+    props: { article },
+  }));
+}
+
+const { article } = Astro.props;
+const { Content } = await render(article);
+const hasBody = Boolean(article.body && article.body.trim().length > 0);
+---
+
+<Layout title={article.data.title} description={article.data.description}>
+  <article>
+    <h1>{article.data.title}</h1>
+    <p class="muted">
+      <time datetime={article.data.date.toISOString()}>
+        {formatDate(article.data.date)}
+      </time>
+      {" · "}
+      {article.data.readingTime}
+    </p>
+    <p>{article.data.tags.join(" · ")}</p>
+
+    {hasBody ? (
+      <div class="article-body">
+        <Content />
+      </div>
+    ) : (
+      <p class="muted">
+        Draft in progress. This article has not been written yet.
+      </p>
+    )}
+
+    <p>
+      <a href="/writing">← All writing</a>
+    </p>
+  </article>
+</Layout>

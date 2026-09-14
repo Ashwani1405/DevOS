@@ -1,0 +1,115 @@
+---
+import { site } from "../data/site";
+const year = new Date().getFullYear();
+---
+
+<footer class="site-footer">
+  <div class="container footer-container">
+    <div class="footer-left">
+      <h3 class="footer-heading">LET'S CONNECT</h3>
+      <p class="footer-desc">
+        Hiring, or just curious what I've shipped? <a href="/work">View my work history</a>.
+      </p>
+      <a href={`mailto:${site.email}`} class="footer-email">{site.email}</a>
+    </div>
+
+    <div class="footer-right">
+      <nav class="footer-social" aria-label="Social">
+        <a href={site.social.github} target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href={site.social.twitter} target="_blank" rel="noopener noreferrer">X</a>
+        <a href={site.social.linkedin} target="_blank" rel="noopener noreferrer">LinkedIn</a>
+        <a href={`mailto:${site.email}`}>Email</a>
+      </nav>
+      <p class="footer-copy">© {year} {site.name}</p>
+    </div>
+  </div>
+</footer>
+
+<style>
+  .footer-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+
+  .footer-left {
+    max-width: 400px;
+  }
+
+  .footer-heading {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    color: var(--ink);
+    margin-bottom: 1rem;
+  }
+
+  .footer-desc {
+    font-size: 0.875rem;
+    color: var(--muted);
+    margin-bottom: 0.5rem;
+  }
+
+  .footer-desc a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  .footer-desc a:hover {
+    text-decoration: underline;
+  }
+
+  .footer-email {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    color: var(--ink);
+    text-decoration: none;
+    transition: color 0.2s ease;
+  }
+
+  .footer-email:hover {
+    color: var(--accent);
+  }
+
+  .footer-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    text-align: right;
+  }
+
+  .footer-social {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .footer-social a {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color 0.2s ease;
+  }
+
+  .footer-social a:hover {
+    color: var(--accent);
+  }
+
+  .footer-copy {
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  @media (max-width: 768px) {
+    .footer-container {
+      flex-direction: column;
+      gap: 3rem;
+    }
+
+    .footer-right {
+      align-items: flex-start;
+      text-align: left;
+    }
+  }
+</style>

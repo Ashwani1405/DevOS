@@ -1,0 +1,68 @@
+<div class="identity" aria-hidden="true">
+    <div class="identity-name">YASH</div>
+    <div class="identity-rule"></div>
+    <div class="identity-letter">I</div>
+</div>
+
+<style>
+    .identity {
+        position: absolute;
+        inset: 0;
+
+        z-index: 5;
+        pointer-events: none;
+    }
+
+    .identity-name {
+        position: absolute;
+        left: 10px;
+        top: 50%;
+
+        transform: translateY(-50%) rotate(-90deg);
+
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+
+        color: var(--ink);
+    }
+
+    .identity-rule {
+        position: absolute;
+        left: 28px;
+        top: 50%;
+
+        width: 1px;
+        height: clamp(100px, 18vh, 160px);
+
+        transform: translateY(-50%);
+
+        background: var(--accent);
+    }
+
+    .identity-letter {
+        position: absolute;
+        left: 55px;
+        top: 55%;
+
+        transform: translateY(-50%) scaleX(0.43);
+
+        transform-origin: center;
+
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 250px;
+        font-weight: 900;
+        line-height: 0.62;
+
+        color: var(--accent);
+
+        user-select: none;
+    }
+
+    @media (max-width: 800px) {
+        .identity {
+            display: none;
+        }
+    }
+</style>

@@ -1,0 +1,36 @@
+---
+import Layout from "../../layouts/Base.astro";
+import { getShelf } from "../../lib/content/index";
+import { formatDate } from "../../lib/formatDate";
+
+export async function getStaticPaths() {
+  const items = await getShelf();
+  return items.map((item) => ({ params: { slug: item.slug }, props: { item } }));
+}
+
+const { item } = Astro.props;
+const hasBody = Boolean(item.body && item.body.trim().length > 0);
+---
+
+<Layout title={item.title} description={`${item.title} — ${item.author}`}>
+  <article>
+    <h1>{item.title}</h1>
+    <p class="muted">
+      {item.author}
+      {" · "}
+      {item.status}
+      {" · "}
+      {item.category}
+    </p>
+    {item.notes ? <p>{item.notes}</p> : null}
+    {item.link ? (
+      <p>
+        <a href={item.link} target="_blank" rel="noopener noreferrer">External link</a>
+      </p>
+    ) : null}
+    {hasBody ? <div class="shelf-notes"><p>{item.body}</p></div> : null}
+    <p>
+      <a href="/shelf">← All shelf</a>
+    </p>
+  </article>
+</Layout>

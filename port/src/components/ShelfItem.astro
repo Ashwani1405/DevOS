@@ -1,0 +1,27 @@
+---
+import type { LoadedShelf } from "../lib/content/index";
+
+interface Props {
+  item: LoadedShelf;
+}
+
+const { item } = Astro.props;
+const href = `/shelf/${item.slug}`;
+---
+
+<li class="reading-item">
+  <div class="reading-main">
+    <h3 class="reading-title">
+      <a href={href}>{item.title}</a>
+    </h3>
+    <p class="reading-author">{item.author}</p>
+  </div>
+  <div class="reading-meta">
+    <span class="reading-category">{item.category}</span>
+    <span class="reading-type">{item.type}</span>
+  </div>
+  {item.notes ? <p class="reading-notes">{item.notes}</p> : null}
+  {item.rating !== undefined ? (
+    <span class="reading-rating">Rated {item.rating}</span>
+  ) : null}
+</li>

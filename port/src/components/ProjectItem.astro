@@ -1,0 +1,24 @@
+---
+interface Props {
+	slug: string;
+	title: string;
+	description: string;
+	year: number | string;
+	status: string;
+	technologies: string[];
+}
+
+const { slug, title, description, year, status, technologies } = Astro.props;
+---
+
+<li class="project-item">
+  <div class="project-meta">
+    <span class="project-year">{year}</span>
+    <span class="project-status">{status}</span>
+  </div>
+  <h3 class="project-title">
+    <a href={`/projects/${slug}`}>{title}</a>
+  </h3>
+  <p class="project-desc">{description}</p>
+  <p class="project-tech">{technologies.join(" · ")}</p>
+</li>

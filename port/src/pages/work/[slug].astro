@@ -1,0 +1,39 @@
+---
+import Layout from "../../layouts/Base.astro";
+import { getWork } from "../../lib/content/index";
+
+export async function getStaticPaths() {
+  const work = await getWork();
+  return work.map((item) => ({ params: { slug: item.slug }, props: { item } }));
+}
+
+const { item } = Astro.props;
+const dateLabel = `${item.startDate} — ${item.endDate ?? "Present"}`;
+const hasBody = Boolean(item.body && item.body.trim().length > 0);
+---
+
+<Layout title={`${item.role} — ${item.company}`} description={item.description}>
+  <article>
+    <h1>{item.role}</h1>
+    <p class="work-company">{item.company}</p>
+    <p class="muted">
+      {dateLabel}
+      {item.location ? ` · ${item.location}${item.remote ? " · Remote" : ""}` : ""}
+    </p>
+    {item.description ? <p>{item.description}</p> : null}
+    {item.bullets.length > 0 ? (
+      <ul>
+        {item.bullets.map((bullet) => (
+          <li>{bullet}</li>
+        ))}
+      </ul>
+    ) : null}
+    {item.technologies.length > 0 ? (
+      <p class="muted">{item.technologies.join(" · ")}</p>
+    ) : null}
+    {hasBody ? <div class="work-body"><p>{item.body}</p></div> : null}
+    <p>
+      <a href="/work">← All work</a>
+    </p>
+  </article>
+</Layout>

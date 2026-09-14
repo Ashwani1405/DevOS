@@ -1,0 +1,16 @@
+---
+import WorkItem from "./WorkItem.astro";
+import type { LoadedWork } from "../lib/content/index";
+
+interface Props {
+	workList: LoadedWork[];
+}
+
+const { workList } = Astro.props;
+---
+
+<ul class="work-list">
+  {workList.map((item) => (
+    <WorkItem work={item} />
+  ))}
+</ul>

@@ -1,0 +1,96 @@
+---
+import Layout from "../layouts/Base.astro";
+import ProfilePanel from "../components/ProfilePanel.astro";
+import IdentityPanel from "../components/IdentityPanel.astro";
+import ConnectorRotator from "../components/ConnectorRotator.astro";
+import TraceScroll from "../components/TraceScroll.astro";
+import ActivitySection from "../components/ActivitySection.astro";
+
+import { traces } from "../data/site";
+import { buildGraph } from "../lib/graph/buildGraph";
+import { getGitHubActivity } from "../lib/github";
+
+const graph = await buildGraph(traces);
+const github = await getGitHubActivity();
+---
+
+<Layout title="Yash Bahuguna">
+    <main class="editorial-shell">
+        <aside class="profile-column">
+            <ProfilePanel />
+        </aside>
+
+        <section class="main-column">
+            <section class="trace-scene">
+                <div class="trace-system">
+                    <IdentityPanel />
+                    <ConnectorRotator traces={traces} />
+                    <TraceScroll graph={graph} traces={traces} />
+                </div>
+            </section>
+
+            <ActivitySection github={github} />
+        </section>
+    </main>
+</Layout>
+
+<style>
+    .editorial-shell {
+        display: grid;
+
+        grid-template-columns:
+            390px
+            minmax(0, 1fr);
+
+        min-height: 100vh;
+    }
+
+    .profile-column {
+        position: relative;
+        min-width: 0;
+    }
+
+    .main-column {
+        min-width: 0;
+    }
+
+    .trace-scene {
+        position: relative;
+        min-height: 660px;
+    }
+
+    .trace-system {
+        position: relative;
+
+        height: 660px;
+
+        overflow: hidden;
+    }
+
+    @media (max-width: 1100px) {
+        .editorial-shell {
+            grid-template-columns:
+                330px
+                minmax(0, 1fr);
+        }
+    }
+
+    @media (max-width: 800px) {
+        .editorial-shell {
+            display: block;
+        }
+
+        .profile-column {
+            min-height: auto;
+        }
+
+        .trace-scene {
+            min-height: auto;
+        }
+
+        .trace-system {
+            height: auto;
+            overflow: visible;
+        }
+    }
+</style>

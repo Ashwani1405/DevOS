@@ -1,0 +1,17 @@
+---
+import type { GitHubActivityData } from "../lib/github/types";
+import ContributionGraph from "./ContributionGraph.astro";
+
+interface Props {
+  data: GitHubActivityData;
+}
+
+const { data } = Astro.props;
+---
+
+<div class="github-activity">
+  <ContributionGraph
+    weeks={data.contributions}
+    totalContributions={data.totalContributions}
+  />
+</div>

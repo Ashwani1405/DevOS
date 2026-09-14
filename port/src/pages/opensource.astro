@@ -1,0 +1,187 @@
+---
+import Layout from "../layouts/Base.astro";
+import { getGitHubActivity } from "../lib/github/index";
+import { formatDate } from "../lib/formatDate";
+
+const github = await getGitHubActivity();
+const prs = github.available ? github.data.pullRequests : [];
+const issues = github.available ? github.data.issues : [];
+const prCounts = github.available ? github.data.prCounts : { open: 0, merged: 0, closed: 0, total: 0 };
+
+// Group PRs by repository
+const grouped = new Map<string, typeof prs>();
+for (const pr of prs) {
+	const list = grouped.get(pr.repository) || [];
+	list.push(pr);
+	grouped.set(pr.repository, list);
+}
+const repos = Array.from(grouped.entries()).sort(
+	(a, b) => b[1].length - a[1].length
+);
+
+function stateLabel(state: string): string {
+	switch (state) {
+		case "merged": return "Merged";
+		case "closed": return "Closed";
+		default: return "Open";
+	}
+}
+---
+
+<Layout title="Open Source" description="Pull requests and issues across repos, pulled live from GitHub.">
+  <div class="oss-page">
+    <div class="page-hero">
+      <h1>open source</h1>
+      <p class="muted">
+        pull requests and issues across repos, pulled live from GitHub.
+        {github.available && (
+          <span>{prCounts.merged} merged/{prCounts.open} open.</span>
+        )}
+      </p>
+    </div>
+
+    {!github.available ? (
+      <div class="card">
+        <p class="muted">GitHub activity will appear here once GITHUB_TOKEN and GITHUB_USERNAME are configured in .env</p>
+      </div>
+    ) : (
+      <div class="oss-content">
+        <!-- Filter tabs -->
+        <div class="oss-filters" id="oss-filters">
+          <button class="oss-filter active" data-filter="all">all</button>
+          <button class="oss-filter" data-filter="pull_requests">pull requests</button>
+          <button class="oss-filter" data-filter="issues">issues</button>
+        </div>
+
+        <div class="oss-sub-filters" id="oss-sub-filters">
+          <button class="oss-filter active" data-state="all">all</button>
+          <button class="oss-filter" data-state="open">open</button>
+          <button class="oss-filter" data-state="closed">closed</button>
+          <button class="oss-filter" data-state="merged">merged</button>
+        </div>
+
+        <!-- PR list grouped by repo -->
+        <div class="oss-list" id="oss-list">
+          {repos.map(([repo, repoPrs]) => (
+            <div class="oss-group" data-repo={repo}>
+              <h3 class="oss-group-title">{repo}</h3>
+              {repoPrs.map((pr) => (
+                <div
+                  class="oss-pr-row"
+                  data-type="pull_request"
+                  data-state={pr.state}
+                >
+                  <div class="oss-pr-left">
+                    <span class={`oss-pr-state oss-pr-state--${pr.state}`}></span>
+                    <a href={pr.url} target="_blank" rel="noopener noreferrer" class="oss-pr-title">
+                      {pr.title}
+                    </a>
+                  </div>
+                  <div class="oss-pr-right">
+                    {pr.language && <span class="oss-pr-lang">{pr.language}</span>}
+                    <span class="oss-pr-number">#{pr.number}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+
+          {issues.length > 0 && (
+            <div class="oss-group" data-repo="issues">
+              <h3 class="oss-group-title">Issues</h3>
+              {issues.map((issue) => (
+                <div
+                  class="oss-pr-row"
+                  data-type="issue"
+                  data-state={issue.state}
+                >
+                  <div class="oss-pr-left">
+                    <span class={`oss-pr-state oss-pr-state--${issue.state}`}></span>
+                    <a href={issue.url} target="_blank" rel="noopener noreferrer" class="oss-pr-title">
+                      {issue.title}
+                    </a>
+                  </div>
+                  <div class="oss-pr-right">
+                    <span class="oss-pr-lang">{issue.repository}</span>
+                    <span class="oss-pr-number">#{issue.number}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+  </div>
+</Layout>
+
+<script>
+  // Client-side filtering for OSS page
+  const filters = document.getElementById("oss-filters");
+  const subFilters = document.getElementById("oss-sub-filters");
+  const rows = document.querySelectorAll<HTMLElement>(".oss-pr-row");
+  const groups = document.querySelectorAll<HTMLElement>(".oss-group");
+
+  let activeType = "all";
+  let activeState = "all";
+
+  function applyFilters() {
+    rows.forEach((row) => {
+      const type = row.dataset.type ?? "";
+      const state = row.dataset.state ?? "";
+
+      const typeMatch =
+        activeType === "all" ||
+        (activeType === "pull_requests" && type === "pull_request") ||
+        (activeType === "issues" && type === "issue");
+
+      const stateMatch = activeState === "all" || state === activeState;
+
+      row.style.display = typeMatch && stateMatch ? "" : "none";
+    });
+
+    // Hide empty groups
+    groups.forEach((group) => {
+      const visibleRows = group.querySelectorAll<HTMLElement>(
+        '.oss-pr-row:not([style*="display: none"])'
+      );
+      group.style.display = visibleRows.length > 0 ? "" : "none";
+    });
+  }
+
+  filters?.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>(".oss-filter");
+    if (!btn) return;
+    filters.querySelectorAll(".oss-filter").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    activeType = btn.dataset.filter ?? "all";
+    applyFilters();
+  });
+
+  subFilters?.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>(".oss-filter");
+    if (!btn) return;
+    subFilters.querySelectorAll(".oss-filter").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    activeState = btn.dataset.state ?? "all";
+    applyFilters();
+  });
+</script>
+
+<style>
+  .oss-page {
+    max-width: 100%;
+  }
+
+  .oss-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .oss-sub-filters {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+  }
+</style>

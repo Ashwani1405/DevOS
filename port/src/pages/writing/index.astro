@@ -1,0 +1,23 @@
+---
+import Layout from "../../layouts/Base.astro";
+import Section from "../../components/Section.astro";
+import WritingList from "../../components/WritingList.astro";
+import { getCollection } from "astro:content";
+
+const writing = (await getCollection("writing"))
+  .filter((a) => a.data.status !== "draft")
+  .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
+---
+
+<Layout title="Writing" description="Articles and notes about software engineering.">
+  <div>
+    <h1>Writing</h1>
+    <p class="muted">
+      Articles and notes about concurrency, backend systems, and the things I
+      learn at work.
+    </p>
+    <Section title="Articles">
+      <WritingList articles={writing} />
+    </Section>
+  </div>
+</Layout>

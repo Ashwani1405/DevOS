@@ -1,0 +1,32 @@
+---
+import ProjectItem from "./ProjectItem.astro";
+
+interface Props {
+	projects: Array<{
+		id: string;
+		data: {
+			slug?: string;
+			title: string;
+			description: string;
+			year: number | string;
+			status: string;
+			technologies: string[];
+		};
+	}>;
+}
+
+const { projects } = Astro.props;
+---
+
+<ul class="project-list">
+  {projects.map((project) => (
+    <ProjectItem
+      slug={(project.data.slug as string) || project.id}
+      title={project.data.title}
+      description={project.data.description}
+      year={project.data.year}
+      status={project.data.status}
+      technologies={project.data.technologies}
+    />
+  ))}
+</ul>

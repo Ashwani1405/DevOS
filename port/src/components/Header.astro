@@ -1,0 +1,218 @@
+---
+import { site, nav } from "../data/site";
+
+const currentPath = Astro.url.pathname;
+---
+
+<header class="site-header">
+    <div class="container header-container">
+        <div class="header-left">
+            <a href="/" class="header-name">{site.name.toLowerCase()}</a>
+            <button
+                class="mobile-menu-btn"
+                id="mobile-menu-btn"
+                aria-label="Toggle Menu"
+            >
+                <svg
+                    width="24"
+                    height="24"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                >
+                    <line x1="3" y1="12" x2="21" y2="12"></line>
+                    <line x1="3" y1="6" x2="21" y2="6"></line>
+                    <line x1="3" y1="18" x2="21" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+
+        <nav class="header-center" id="nav-menu" aria-label="Primary">
+            <ul class="nav-links">
+                {
+                    nav.map((link) => (
+                        <li>
+                            <a
+                                href={link.href}
+                                class:list={[
+                                    "nav-link",
+                                    {
+                                        active:
+                                            currentPath === link.href ||
+                                            (link.href !== "/" &&
+                                                currentPath.startsWith(
+                                                    link.href + "/",
+                                                )),
+                                    },
+                                ]}
+                            >
+                                {link.label}
+                            </a>
+                        </li>
+                    ))
+                }
+            </ul>
+        </nav>
+
+        <div class="header-right">
+            <div class="status-indicator">
+                <div class="status-top">
+                    <span class="status-dot">●</span> ACTIVE
+                </div>
+                <div class="status-desc">
+                    Building ForgeQueue<br />Pushing to main
+                </div>
+            </div>
+        </div>
+    </div>
+</header>
+
+<script>
+    const btn = document.getElementById("mobile-menu-btn");
+    const nav = document.getElementById("nav-menu");
+
+    btn?.addEventListener("click", () => {
+        nav?.classList.toggle("is-open");
+    });
+</script>
+
+<style>
+    .site-header {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        background: var(--bg);
+    }
+    .header-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+    }
+
+    .header-left {
+        flex: 1;
+    }
+
+    .header-name {
+        font-size: 1rem;
+        font-weight: 500;
+        text-decoration: none;
+        color: var(--ink);
+    }
+
+    .mobile-menu-btn {
+        display: none;
+        background: none;
+        border: none;
+        color: var(--ink);
+        cursor: pointer;
+        padding: 0.5rem;
+    }
+
+    .header-center {
+        flex: 2;
+        display: flex;
+        justify-content: center;
+    }
+
+    .nav-links {
+        display: flex;
+        gap: 3rem;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .nav-link {
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        letter-spacing: 0.05em;
+        text-decoration: none;
+        color: var(--muted);
+        transition: color 0.2s ease;
+    }
+
+    .nav-link:hover,
+    .nav-link.active {
+        color: var(--ink);
+    }
+
+    .header-right {
+        flex: 1;
+        display: flex;
+        justify-content: flex-end;
+    }
+
+    .status-indicator {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        line-height: 1.4;
+        text-align: right;
+        color: var(--muted);
+    }
+
+    .status-top {
+        color: var(--ink);
+        font-weight: 500;
+        margin-bottom: 0.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.35rem;
+    }
+
+    .status-dot {
+        color: var(--accent);
+        font-size: 0.5rem;
+    }
+
+    @media (max-width: 900px) {
+        .nav-links {
+            gap: 1.5rem;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .header-container {
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .header-left {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+        }
+
+        .mobile-menu-btn {
+            display: block;
+        }
+
+        .header-center {
+            order: 3;
+            flex-basis: 100%;
+            justify-content: flex-start;
+            margin-top: 0;
+            display: none; /* hidden by default */
+        }
+
+        .header-center.is-open {
+            display: flex;
+        }
+
+        .nav-links {
+            gap: 1.5rem;
+            flex-direction: column;
+            width: 100%;
+        }
+
+        .header-right {
+            order: 2;
+            display: none; /* keep active status hidden on very small screens if needed, or reorder */
+        }
+    }
+</style>

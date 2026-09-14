@@ -1,0 +1,87 @@
+---
+/*
+ * ActivitySection — GitHub + Spotify, below the trace scene.
+ */
+
+import type { GitHubActivityResult } from "../lib/github/index";
+import GitHubActivity from "./GitHubActivity.astro";
+
+interface Props {
+    github: GitHubActivityResult;
+}
+
+const { github } = Astro.props;
+---
+
+<div class="activity-section">
+    <section class="activity-github">
+        <div class="activity-heading">GITHUB ACTIVITY</div>
+
+        {
+            github.available && github.data ? (
+                <GitHubActivity data={github.data} />
+            ) : (
+                <p class="activity-empty">
+                    GitHub activity will appear here once configured.
+                </p>
+            )
+        }
+    </section>
+
+    <section class="activity-spotify">
+        <div class="activity-heading">CURRENTLY LISTENING</div>
+
+        <!-- Spotify component goes here -->
+    </section>
+</div>
+
+<style>
+    .activity-section {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border-top: 1px solid var(--accent);
+    }
+
+    .activity-github,
+    .activity-spotify {
+        padding: 36px 44px;
+        min-width: 0;
+    }
+
+    .activity-github {
+        border-right: 1px solid var(--accent);
+    }
+
+    .activity-heading {
+        margin-bottom: 28px;
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+    }
+
+    .activity-empty {
+        margin: 0;
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 10px;
+        letter-spacing: 0.04em;
+    }
+
+    @media (max-width: 720px) {
+        .activity-section {
+            grid-template-columns: 1fr;
+        }
+
+        .activity-github {
+            border-right: 0;
+            border-bottom: 1px solid var(--accent);
+        }
+
+        .activity-github,
+        .activity-spotify {
+            padding: 30px 24px;
+        }
+    }
+</style>

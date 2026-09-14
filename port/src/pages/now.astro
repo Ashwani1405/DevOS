@@ -1,0 +1,28 @@
+---
+import Layout from "../layouts/Base.astro";
+import { getPost } from "../lib/content/index";
+
+const post = await getPost("now");
+const hasBody = Boolean(post && post.body.trim().length > 0);
+---
+
+<Layout
+  title="Now"
+  description="What I'm currently building, reading, writing, and learning."
+>
+  <div>
+    <h1>Now</h1>
+    {post ? (
+      hasBody ? (
+        <div class="now-body"><p>{post.body}</p></div>
+      ) : (
+        <p class="muted">{post.title}</p>
+      )
+    ) : (
+      <p class="muted">
+        Add <code>Yash/now.md</code> in your Obsidian vault with{" "}
+        <code>published: true</code> to fill this page.
+      </p>
+    )}
+  </div>
+</Layout>

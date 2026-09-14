@@ -1,0 +1,55 @@
+---
+import Layout from "../layouts/Base.astro";
+import Section from "../components/Section.astro";
+import { site } from "../data/site";
+import { getPost } from "../lib/content/index";
+
+const bio = await getPost("bio");
+const about = await getPost("about");
+const elsewhere = await getPost("elsewhere");
+
+const intro = (about?.body || bio?.body || site.bio || "").trim();
+const elsewhereBody = (elsewhere?.body || "").trim();
+
+const links: { label: string; href: string }[] = [
+  { label: "GitHub", href: site.social.github },
+  { label: "LinkedIn", href: site.social.linkedin },
+  { label: "Resume", href: site.social.resume },
+  { label: "Email", href: `mailto:${site.email}` },
+];
+---
+
+<Layout title="About" description="About Yash Bahuguna.">
+  <div>
+    <h1>About</h1>
+
+    <Section title="Introduction">
+      {intro ? (
+        <p>{intro}</p>
+      ) : (
+        <p class="muted">
+          Add <code>Yash/about.md</code> in your Obsidian vault with{" "}
+          <code>published: true</code> to fill this introduction.
+        </p>
+      )}
+    </Section>
+
+    {elsewhereBody ? (
+      <Section title="Elsewhere">
+        <p>{elsewhereBody}</p>
+      </Section>
+    ) : null}
+
+    <Section title="Links">
+      <ul>
+        {links.map((link) => (
+          <li>
+            <a href={link.href} target="_blank" rel="noopener noreferrer">
+              {link.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </Section>
+  </div>
+</Layout>

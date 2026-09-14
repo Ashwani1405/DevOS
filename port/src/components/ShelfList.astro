@@ -1,0 +1,20 @@
+---
+import ShelfItem from "./ShelfItem.astro";
+import type { LoadedShelf } from "../lib/content/index";
+
+interface Props {
+  items: LoadedShelf[];
+}
+
+const { items } = Astro.props;
+---
+
+{
+  items.length === 0 ? null : (
+    <ul class="reading-list">
+      {items.map((item) => (
+        <ShelfItem item={item} />
+      ))}
+    </ul>
+  )
+}

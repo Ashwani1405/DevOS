@@ -1,0 +1,34 @@
+{
+  "name": "Yash Bahuguna",
+  "title": "Yash Bahuguna — software engineer & writer",
+  "description": "Personal website of Yash Bahuguna: software engineering, writing, and reading.",
+  "url": "https://yashbahuguna.dev",
+  "email": "hello@example.com",
+  "location": "India",
+  "bio": "Software engineer building backend systems. I write about concurrency, worker pools, and the systems I work on.",
+  "meta": {
+    "ogType": "website"
+  },
+  "social": {
+    "github": "https://github.com/yashbahuguna",
+    "linkedin": "https://linkedin.com/in/yashbahuguna",
+    "resume": "/resume.pdf",
+    "email": "hello@example.com"
+  },
+  "nav": [
+    { "label": "YASH", "href": "/yash" },
+    { "label": "WORK", "href": "/work" },
+    { "label": "PROJECTS", "href": "/projects" },
+    { "label": "WRITING", "href": "/writing" },
+    { "label": "SHELF", "href": "/shelf" },
+    { "label": "CONTACT", "href": "/contact" }
+  ],
+  "homepage": {
+    "sections": ["github", "selected_work", "projects", "writing", "shelf"]
+  },
+  "traces": [
+    { "id": "write", "label": "WRITE", "source": "writing", "visible": true },
+    { "id": "build", "label": "BUILD", "source": "projects", "visible": true },
+    { "id": "read", "label": "READ", "source": "shelf", "visible": true }
+  ]
+}

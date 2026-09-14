@@ -1,0 +1,659 @@
+---
+import type { GraphData, GraphNode } from "../lib/graph/buildGraph";
+import type { TraceConfig } from "../data/site";
+import { traces } from "../data/site";
+import { buildGraph } from "../lib/graph/buildGraph";
+
+const graph = await buildGraph(traces);
+
+const visibleTraces = traces.filter(
+  (trace) => trace.enabled !== false
+);
+
+function itemsFor(trace: TraceConfig) {
+  const node = graph.nodes.find(
+    (n: GraphNode) => n.id === trace.key
+  );
+
+  return (node?.items ?? []).slice(0, 3);
+}
+
+function tracePath(key: string) {
+  if (key === "write") return "/writing";
+  if (key === "build") return "/projects";
+  if (key === "read") return "/shelf";
+  return "#";
+}
+
+function traceClass(key: string) {
+  return `trace-${key}`;
+}
+---
+
+<section class="graph-shell">
+
+  <!-- IDENTITY -->
+  <div class="identity">
+
+    <div class="identity-name" aria-hidden="true">
+      <span>Y</span>
+      <span>A</span>
+      <span>S</span>
+      <span>H</span>
+    </div>
+
+    <div class="identity-rule"></div>
+
+    <div class="identity-i" aria-label="I">
+      I
+    </div>
+
+  </div>
+
+
+  <!-- CONNECTIONS -->
+
+  <div class="connection connection-write">
+    <span class="connection-line"></span>
+    <span class="connection-dot"></span>
+  </div>
+
+  <div class="connection connection-build">
+    <span class="connection-line"></span>
+    <span class="connection-dot"></span>
+  </div>
+
+  <div class="connection connection-read">
+    <span class="connection-line"></span>
+    <span class="connection-dot"></span>
+  </div>
+
+
+  <!-- WRITE -->
+  {
+    visibleTraces.map((trace) => {
+      const items = itemsFor(trace);
+
+      return (
+        <article
+          class={`trace ${traceClass(trace.key)}`}
+        >
+          <div class="trace-header">
+            <div class="trace-title">
+              {trace.label}
+            </div>
+
+            <div class="trace-count">
+              {items.length}
+            </div>
+          </div>
+
+          <div class="trace-rule"></div>
+
+          <div class="trace-items">
+            {items.map((item) => (
+              <a
+                class="trace-item"
+                href={
+                  item.href ??
+                  `${tracePath(trace.key)}/${item.slug}`
+                }
+              >
+                <span class="item-title">
+                  {item.title}
+                </span>
+
+                {item.meta && (
+                  <span class="item-meta">
+                    {item.meta}
+                  </span>
+                )}
+              </a>
+            ))}
+          </div>
+
+          <a
+            class="view-all"
+            href={tracePath(trace.key)}
+          >
+            VIEW ALL →
+          </a>
+        </article>
+      );
+    })
+  }
+
+
+  <div class="graph-caption">
+    <span>TRACES</span>
+    <span>WHAT I WRITE · BUILD · READ</span>
+  </div>
+
+</section>
+
+
+<style>
+  /* =========================================================
+     GRAPH
+     ========================================================= */
+
+  .graph-shell {
+    position: relative;
+
+    width: 100%;
+    min-height: 650px;
+
+    overflow: visible;
+
+    color: var(--ink);
+  }
+
+
+  /* =========================================================
+     IDENTITY
+     ========================================================= */
+
+  .identity {
+    position: absolute;
+
+    left: 4%;
+    top: 45px;
+
+    width: 380px;
+    height: 540px;
+
+    pointer-events: none;
+
+    z-index: 2;
+  }
+
+  .identity-name {
+    position: absolute;
+
+    left: 0;
+    top: 105px;
+
+    display: flex;
+    flex-direction: column;
+
+    color: var(--accent);
+
+    font-family: var(--font-mono);
+
+    font-size: 0.72rem;
+    font-weight: 500;
+
+    line-height: 1.25;
+
+    letter-spacing: 0.08em;
+  }
+
+  .identity-rule {
+    position: absolute;
+
+    left: 29px;
+    top: 105px;
+
+    width: 1px;
+    height: 122px;
+
+    background: var(--accent);
+  }
+
+  .identity-i {
+    position: absolute;
+
+    left: 62px;
+    top: 5px;
+
+    color: var(--accent);
+
+    font-family: var(--font-serif);
+
+    font-size: 500px;
+    font-weight: 900;
+
+    line-height: 0.9;
+
+    letter-spacing: -0.08em;
+
+    transform: scaleX(0.78);
+
+    transform-origin: center;
+
+    user-select: none;
+  }
+
+
+  /* =========================================================
+     TRACES
+     ========================================================= */
+
+  .trace {
+    position: absolute;
+
+    z-index: 5;
+
+    width: 255px;
+  }
+
+  .trace-write {
+    left: 48%;
+    top: 55px;
+  }
+
+  .trace-build {
+    left: 48%;
+    top: 380px;
+  }
+
+  .trace-read {
+    left: 74%;
+    top: 485px;
+  }
+
+  .trace-header {
+    display: flex;
+
+    align-items: baseline;
+    justify-content: space-between;
+
+    gap: 1rem;
+  }
+
+  .trace-title {
+    color: var(--ink);
+
+    font-family: var(--font-mono);
+
+    font-size: 0.75rem;
+    font-weight: 600;
+
+    letter-spacing: 0.12em;
+  }
+
+  .trace-count {
+    color: var(--muted);
+
+    font-family: var(--font-mono);
+
+    font-size: 0.6rem;
+  }
+
+  .trace-rule {
+    width: 100%;
+
+    margin: 0.65rem 0 0.8rem;
+
+    border-top: 1px solid var(--accent);
+  }
+
+  .trace-items {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .trace-item {
+    display: grid;
+
+    grid-template-columns: 1fr auto;
+
+    gap: 1rem;
+
+    padding: 0.42rem 0;
+
+    color: inherit;
+
+    text-decoration: none;
+
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  .item-title {
+    min-width: 0;
+
+    overflow: hidden;
+
+    color: var(--ink);
+
+    font-family: var(--font-serif);
+
+    font-size: 0.95rem;
+
+    line-height: 1.25;
+
+    text-overflow: ellipsis;
+
+    white-space: nowrap;
+  }
+
+  .item-meta {
+    color: var(--muted);
+
+    font-family: var(--font-mono);
+
+    font-size: 0.58rem;
+
+    white-space: nowrap;
+  }
+
+  .trace-item:hover .item-title {
+    color: var(--accent);
+  }
+
+  .view-all {
+    display: inline-block;
+
+    margin-top: 0.85rem;
+
+    color: var(--accent);
+
+    font-family: var(--font-mono);
+
+    font-size: 0.6rem;
+
+    letter-spacing: 0.08em;
+
+    text-decoration: none;
+  }
+
+  .view-all:hover {
+    text-decoration: underline;
+  }
+
+
+  /* =========================================================
+     CONNECTIONS
+     ========================================================= */
+
+  .connection {
+    position: absolute;
+
+    z-index: 1;
+
+    pointer-events: none;
+
+    height: 1px;
+  }
+
+  .connection-line {
+    position: absolute;
+
+    display: block;
+
+    width: 100%;
+    height: 1px;
+
+    background: var(--accent);
+
+    transform-origin: left center;
+  }
+
+  .connection-dot {
+    position: absolute;
+
+    right: -3px;
+    top: -3px;
+
+    width: 6px;
+    height: 6px;
+
+    border-radius: 50%;
+
+    background: var(--accent);
+  }
+
+
+  /*
+   * WRITE
+   *
+   * Starts near the upper-right of the I
+   * and rises toward WRITE.
+   */
+
+  .connection-write {
+    left: 27%;
+    top: 215px;
+
+    width: 22%;
+
+    transform: rotate(-20deg);
+  }
+
+
+  /*
+   * BUILD
+   *
+   * Lower branch.
+   */
+
+  .connection-build {
+    left: 28%;
+    top: 430px;
+
+    width: 21%;
+
+    transform: rotate(-7deg);
+  }
+
+
+  /*
+   * READ
+   *
+   * Same lower junction but travels farther right.
+   */
+
+  .connection-read {
+    left: 28%;
+    top: 430px;
+
+    width: 48%;
+
+    transform: rotate(12deg);
+  }
+
+
+  /* =========================================================
+     CAPTION
+     ========================================================= */
+
+  .graph-caption {
+    position: absolute;
+
+    left: 4%;
+    bottom: 5px;
+
+    display: flex;
+
+    gap: 1rem;
+
+    color: var(--muted);
+
+    font-family: var(--font-mono);
+
+    font-size: 0.58rem;
+
+    letter-spacing: 0.08em;
+  }
+
+  .graph-caption span:first-child {
+    color: var(--accent);
+  }
+
+
+  /* =========================================================
+     HOVER
+     ========================================================= */
+
+  .trace {
+    transition:
+      transform 160ms ease,
+      opacity 160ms ease;
+  }
+
+  .trace:hover {
+    transform: translateY(-2px);
+  }
+
+
+  /* =========================================================
+     TABLET
+     ========================================================= */
+
+  @media (max-width: 1100px) {
+
+    .graph-shell {
+      min-height: 620px;
+    }
+
+    .identity {
+      left: 2%;
+      width: 320px;
+    }
+
+    .identity-i {
+      font-size: 430px;
+    }
+
+    .trace {
+      width: 220px;
+    }
+
+    .trace-write {
+      left: 47%;
+    }
+
+    .trace-build {
+      left: 47%;
+    }
+
+    .trace-read {
+      left: 70%;
+    }
+
+    .connection-write {
+      left: 29%;
+      width: 19%;
+    }
+
+    .connection-build {
+      left: 29%;
+      width: 18%;
+    }
+
+    .connection-read {
+      left: 29%;
+      width: 43%;
+    }
+  }
+
+
+  /* =========================================================
+     MOBILE
+     ========================================================= */
+
+  @media (max-width: 768px) {
+
+    .graph-shell {
+      min-height: auto;
+
+      display: flex;
+      flex-direction: column;
+
+      padding-bottom: 2rem;
+    }
+
+    /*
+     * Identity becomes the first visual block.
+     */
+
+    .identity {
+      position: relative;
+
+      left: auto;
+      top: auto;
+
+      width: 100%;
+      height: 300px;
+
+      margin-bottom: 1rem;
+    }
+
+    .identity-name {
+      left: 8px;
+      top: 80px;
+
+      font-size: 0.65rem;
+    }
+
+    .identity-rule {
+      left: 33px;
+      top: 80px;
+
+      height: 105px;
+    }
+
+    .identity-i {
+      left: 58px;
+      top: 0;
+
+      font-size: 290px;
+    }
+
+
+    /*
+     * On mobile, the physical lines become unnecessary.
+     * The hierarchy remains through spacing.
+     */
+
+    .connection {
+      display: none;
+    }
+
+
+    /*
+     * Traces become normal flowing sections.
+     */
+
+    .trace {
+      position: relative;
+
+      left: auto !important;
+      top: auto !important;
+
+      width: 100%;
+
+      margin-top: 2.5rem;
+    }
+
+    .trace-write {
+      margin-top: 1rem;
+    }
+
+    .trace-build,
+    .trace-read {
+      margin-top: 2.5rem;
+    }
+
+    .trace-title {
+      font-size: 0.7rem;
+    }
+
+    .item-title {
+      font-size: 0.9rem;
+    }
+
+    .graph-caption {
+      position: relative;
+
+      left: auto;
+      bottom: auto;
+
+      margin-top: 3rem;
+
+      flex-direction: column;
+
+      gap: 0.3rem;
+    }
+  }
+</style>

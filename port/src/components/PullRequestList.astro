@@ -1,0 +1,72 @@
+---
+import type { PullRequest } from "../../lib/github/types";
+import { formatDate } from "../lib/formatDate";
+
+interface Props {
+	pullRequests: PullRequest[];
+	/** Limit shown; data layer can fetch more. */
+	limit?: number;
+}
+
+const { pullRequests, limit = 20 } = Astro.props;
+const shown = pullRequests.slice(0, limit);
+
+function stateLabel(state: PullRequest["state"]): string {
+	switch (state) {
+		case "merged":
+			return "Merged";
+		case "closed":
+			return "Closed";
+		default:
+			return "Open";
+	}
+}
+---
+
+{
+  shown.length === 0 ? (
+    <p class="muted">No pull requests found.</p>
+  ) : (
+    <ul class="reading-list">
+      {shown.map((pr) => (
+        <li class="reading-item">
+          <div class="pr-meta">
+            <span class="pr-state pr-state--{pr.state}">{stateLabel(pr.state)}</span>
+            <span class="muted">{pr.repository}</span>
+          </div>
+          <h3 class="writing-title">
+            <a href={pr.url} target="_blank" rel="noopener noreferrer">
+              {pr.title}
+            </a>
+          </h3>
+          <p class="muted">
+            #{pr.number} · {formatDate(new Date(pr.updatedDate))}
+          </p>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+<style>
+  .pr-meta {
+    display: flex;
+    gap: 0.75rem;
+    align-items: baseline;
+    font-size: 0.875rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .pr-state {
+    font-weight: 500;
+  }
+  .pr-state--merged {
+    color: #6f42c1;
+  }
+  .pr-state--open {
+    color: #1a7f37;
+  }
+  .pr-state--closed {
+    color: var(--muted);
+  }
+</style>

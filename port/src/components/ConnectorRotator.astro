@@ -1,0 +1,371 @@
+---
+import type { TraceConfig } from "../data/site";
+
+interface Props {
+    traces: TraceConfig[];
+}
+
+const { traces } = Astro.props;
+
+const visible = traces.filter((t) => t.visible !== false);
+---
+
+<div class="connector-rotator" data-connector-rotator aria-hidden="true">
+    <div class="connector-stage">
+        <div class="connector-pivot">
+            <div class="connector-assembly" data-connector-assembly>
+                {
+                    visible.map((trace, index) => (
+                        <div
+                            class:list={[
+                                "connector-arm",
+                                `connector-${trace.id}`,
+                                index === 0 && "is-active",
+                            ]}
+                            data-arm={trace.id}
+                        >
+                            <div class="branch-diagonal" data-branch-diagonal></div>
+
+                            <div class="branch-horizontal" data-branch-horizontal></div>
+
+                            <div class="arm-title-wrap" data-arm-title>
+                                <div
+                                    class="connector-title"
+                                    data-arm-title-label
+                                >
+                                    {trace.label}
+                                </div>
+                            </div>
+                        </div>
+                    ))
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    import gsap from "gsap";
+
+    const root = document.querySelector<HTMLElement>("[data-connector-rotator]");
+    const assembly = document.querySelector<HTMLElement>("[data-connector-assembly]");
+
+    if (root && assembly) {
+        const arms = Array.from(
+            assembly.querySelectorAll<HTMLElement>("[data-arm]"),
+        );
+
+        const titles = Array.from(
+            assembly.querySelectorAll<HTMLElement>("[data-arm-title]"),
+        );
+
+        const ids = arms.map((arm) => arm.dataset.arm ?? "");
+
+        /*
+         * Each arm is a complete two-segment elbow (pivot -> diagonal ->
+         * horizontal -> title). The whole arm sits at a fixed angle relative
+         * to the assembly. When the assembly rotates around the fixed pivot,
+         * the selected arm swings so its horizontal segment lies flat and its
+         * title lands beside the list — like a physical clothing rack.
+         *
+         * Angles measured with CSS rotate: negative swings the arm upward,
+         * positive downward.
+         */
+        const ARM_ANGLE: number[] = [-20, 0, 20];
+
+        // Assembly rotation that brings the active arm's elbow flat.
+        const ASSEMBLY_ANGLE = ARM_ANGLE.map((a) => -a);
+
+        /*
+         * The whole rack leans back about the horizontal axis (rotateX). The
+         * active arm's horizontal run lies along that axis so it stays clean
+         * and flat, while the diagonals and folded arms recede in depth — the
+         * rack reads as a physical 3D object instead of flat 2D lines.
+         */
+        const ROTOR_X = 18;
+
+        let active = 0;
+
+        function rotateToSection(next: number, duration = 0.8) {
+            if (next < 0 || next >= ids.length) return;
+            if (next === active) return;
+
+            const target = ASSEMBLY_ANGLE[next];
+
+            const tween = gsap.timeline({
+                defaults: { ease: "power3.out" },
+                onComplete: () => {
+                    setActive(next);
+                    document.dispatchEvent(
+                        new CustomEvent("trace:rotated", {
+                            detail: { to: ids[next], index: next },
+                        }),
+                    );
+                },
+            });
+
+            // The whole assembly (all three elbows) rotates as one rigid body.
+            // A brief overshoot settles into place like a rack swinging and
+            // coming to rest.
+            tween.to(
+                assembly,
+                { rotation: target + 3, duration: duration * 0.7 },
+                0,
+            );
+            tween.to(
+                assembly,
+                { rotation: target, duration: duration * 0.3, ease: "power2.out" },
+            );
+
+            // Counter-rotate each title so the text stays horizontal and
+            // face-on while the elbow underneath it physically swings.
+            arms.forEach((arm, index) => {
+                const title = titles[index];
+                if (!title) return;
+
+                const titleAngle = -(ARM_ANGLE[index] + target);
+
+                tween.to(
+                    title,
+                    { rotation: titleAngle, duration },
+                    0,
+                );
+            });
+        }
+
+        function setActive(next: number) {
+            active = next;
+
+            arms.forEach((arm, index) => {
+                const isActive = index === next;
+                arm.classList.toggle("is-active", isActive);
+
+                const title = titles[index];
+                if (!title) return;
+                gsap.to(title, {
+                    opacity: isActive ? 1 : 0.35,
+                    duration: 0.25,
+                    overwrite: true,
+                });
+            });
+        }
+
+        function onTraceChange(detail: { from?: string; to?: string }) {
+            const index = ids.indexOf(detail?.to ?? "");
+            if (index < 0) return;
+            const fromIndex = ids.indexOf(detail?.from ?? "");
+            if (fromIndex < 0 || fromIndex === index) return;
+            rotateToSection(index);
+        }
+
+        ["trace:next", "trace:previous"].forEach((name) => {
+            document.addEventListener(name, ((event: CustomEvent) => {
+                onTraceChange(event.detail ?? {});
+            }) as EventListener);
+        });
+
+        // Initial pose: WRITE active -> assembly rotated to bring WRITE's
+        // elbow flat, titles counter-rotated (planar + face-on), WRITE
+        // emphasised.
+        gsap.set(assembly, { rotation: ASSEMBLY_ANGLE[0] });
+        arms.forEach((arm, index) => {
+            gsap.set(titles[index], {
+                rotation: -(ARM_ANGLE[index] + ASSEMBLY_ANGLE[0]),
+                rotationX: -ROTOR_X,
+            });
+            if (index !== 0) {
+                arm.classList.toggle("is-active", false);
+                gsap.set(titles[index], { opacity: 0.35 });
+            }
+        });
+        setActive(0);
+    }
+</script>
+
+<style>
+    .connector-rotator {
+        position: absolute;
+        inset: 0;
+
+        z-index: 3;
+
+        pointer-events: none;
+    }
+
+    /*
+     * A real perspective gives the rack genuine depth. Without it a rotateX
+     * degrades into an orthographic squash, not a 3D recede.
+     */
+    .connector-stage {
+        position: absolute;
+        inset: 0;
+
+        perspective: 1200px;
+        perspective-origin: 50% 50%;
+    }
+
+    /*
+     * The pivot is a fixed 0x0 anchor point just to the right of the giant I,
+     * vertically centred on it. It never moves. The constant rotateX tips the
+     * rack back so diagonals and folded arms recede in depth.
+     */
+    .connector-pivot {
+        position: absolute;
+        left: 150px;
+        top: 55%;
+
+        width: 0;
+        height: 0;
+
+        transform: rotateX(18deg);
+        transform-style: preserve-3d;
+    }
+
+    .connector-assembly {
+        position: absolute;
+        left: 0;
+        top: 0;
+
+        transform-origin: 0 0;
+        transform-style: preserve-3d;
+
+        will-change: transform;
+    }
+
+    /*
+     * Each arm is a 0x0 anchor at the pivot; the elbow segments and title are
+     * absolutely positioned within it and swing with the whole arm.
+     */
+    .connector-arm {
+        position: absolute;
+        left: 0;
+        top: 0;
+
+        width: 0;
+        height: 0;
+
+        transform-origin: 0 0;
+        transform-style: preserve-3d;
+    }
+
+    .connector-arm:nth-child(1) {
+        transform: rotate(-20deg);
+    }
+
+    .connector-arm:nth-child(2) {
+        transform: rotate(0deg);
+    }
+
+    .connector-arm:nth-child(3) {
+        transform: rotate(20deg);
+    }
+
+    /*
+     * Diagonal segment: a 1px bar pivoting at the origin, rotated to reach the
+     * elbow corner (--dx, --dy).
+     */
+    .branch-diagonal {
+        position: absolute;
+        left: 0;
+        top: 0;
+
+        height: 1px;
+
+        transform-origin: 0 0;
+
+        background: var(--accent);
+
+        opacity: 0.3;
+    }
+
+    /*
+     * Horizontal segment: runs from the elbow corner out to the title tip.
+     */
+    .branch-horizontal {
+        position: absolute;
+        left: var(--dx);
+        top: var(--dy);
+
+        height: 1px;
+        width: var(--run);
+
+        background: var(--accent);
+
+        opacity: 0.3;
+    }
+
+    .connector-arm.is-active .branch-diagonal,
+    .connector-arm.is-active .branch-horizontal {
+        opacity: 0.95;
+    }
+
+    /* write */
+    .connector-arm:nth-child(1) {
+        --dx: 70px;
+        --dy: -98px;
+        --run: 230px;
+    }
+    .connector-arm:nth-child(1) .branch-diagonal {
+        width: 120px;
+        transform: rotate(-54.5deg);
+    }
+
+    /* build */
+    .connector-arm:nth-child(2) {
+        --dx: 70px;
+        --dy: 12px;
+        --run: 230px;
+    }
+    .connector-arm:nth-child(2) .branch-diagonal {
+        width: 71px;
+        transform: rotate(9.7deg);
+    }
+
+    /* read */
+    .connector-arm:nth-child(3) {
+        --dx: 70px;
+        --dy: 112px;
+        --run: 230px;
+    }
+    .connector-arm:nth-child(3) .branch-diagonal {
+        width: 132px;
+        transform: rotate(58deg);
+    }
+
+    .arm-title-wrap {
+        position: absolute;
+        left: var(--run);
+        top: var(--dy);
+
+        transform-origin: 50% 50%;
+        transform-style: preserve-3d;
+
+        will-change: transform, opacity;
+    }
+
+    .connector-title {
+        display: block;
+        margin-top: -9px;
+
+        font-family: var(--font-mono);
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+
+        white-space: nowrap;
+
+        color: var(--accent);
+    }
+
+    @media (max-width: 800px) {
+        /*
+         * The giant I is hidden on small screens; without it there is no
+         * fixed pivot, so the connector mechanism is hidden too and only the
+         * normal list remains.
+         */
+        .connector-rotator {
+            display: none;
+        }
+    }
+</style>
