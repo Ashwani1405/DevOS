@@ -9,4 +9,5 @@
 
 pub mod packet;
 pub mod transport;
+pub mod tun;
 pub mod wire;

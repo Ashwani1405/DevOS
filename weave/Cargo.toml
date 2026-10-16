@@ -16,7 +16,8 @@ name = "weave"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal", "time", "io-util"] }
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+tun = { version = "0.8", features = ["async"] }
