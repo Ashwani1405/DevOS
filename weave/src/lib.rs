@@ -7,5 +7,6 @@
 //! not here yet: tun, packet forwarding, crypto, discovery, routing, failover.
 //! this is for local development, not the real wire protocol.
 
+pub mod packet;
 pub mod transport;
 pub mod wire;
