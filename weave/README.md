@@ -4,13 +4,16 @@ Weave is a peer-to-peer Layer-3 overlay network written in Rust. The idea is a
 virtual network on top of the physical one, so peers can exchange IP packets
 without a direct link between them.
 
-This repo has the UDP transport (M1), the two-node TUN overlay (M2), and
-multi-hop routing with static routes (M4). Peer lifecycle/probing (M3) is not
-implemented yet; a minimal peer-availability stand-in is used by routing.
-Encryption, discovery, and automatic failover aren't built yet.
+This repo has the UDP transport (M1), the two-node TUN overlay (M2), multi-hop
+routing with static routes (M4), and topology-driven routing with automatic
+failover (M5). Peers now exchange link state, calculate routes with Dijkstra, and
+switch to an alternate path when a link fails. Peer lifecycle/probing (M3) is
+still not a separate service; M5 derives liveness from the control plane's
+heartbeats. Encryption, discovery, and endpoint migration aren't built yet.
 
-See [`docs/08-m4-routing.md`](./docs/08-m4-routing.md) for multi-hop routing,
-route configuration, and test steps.
+See [`docs/08-m4-routing.md`](./docs/08-m4-routing.md) for static multi-hop
+routing and [`docs/09-m5-topology.md`](./docs/09-m5-topology.md) for topology
+exchange, failure detection, and recovery.
 
 ## The transport
 
@@ -86,6 +89,10 @@ CLI options:
 --address <IP>        this node's overlay address (with --tun)
 --peer-address <IP>   the peer's overlay address (with --tun)
 --route <P=ADDR:PORT> static route, repeatable (with --tun)
+--neighbor <IP=ADDR:PORT> topology neighbour, repeatable; enables dynamic
+                      routing and automatic failover (with --tun)
+--heartbeat-ms <N>    control-plane heartbeat interval (with --tun)
+--link-timeout-ms <N> how long a silent neighbour is trusted (with --tun)
 -h, --help            print help
 -V, --version         print version
 ```
@@ -101,17 +108,20 @@ cargo test
 ```
 
 Tests live beside the modules in `src/` (`wire`, `packet`, `route`, `forward`,
-`peer`, `overlay`) and in `tests/` (`transport.rs`, `routing.rs`, and the
-root-only `tun_open.rs`). They use random free ports, a fake TUN, and short
-timeouts.
+`peer`, `overlay`, `topology`, `control`, `router`) and in `tests/`
+(`transport.rs`, `routing.rs`, `topology.rs`, and the root-only `tun_open.rs`).
+They use random free ports, a fake TUN, and short timeouts. `topology.rs`
+includes a deterministic no-sleep simulation of a four-node failover.
 
 ## Not done yet
 
-- no encryption or authentication
+- no encryption or authentication, including for topology advertisements
 - no delivery, ordering, or duplicate protection
-- peer addresses and routes are set by hand, no discovery
-- no automatic failover between alternate paths
-- no peer lifecycle/probing (M3) yet; peer availability is a manual flag
+- peer addresses are set by hand, no discovery
+- no peer lifecycle/probing (M3) as its own service; liveness comes from the
+  control-plane heartbeat
+- convergence is eventual, not instantaneous or strongly consistent
+- no endpoint migration, NAT traversal, or relay fallback (M6)
 - the frame format is a placeholder and will change
 
 ## License

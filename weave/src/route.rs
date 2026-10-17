@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::str::FromStr;
+use std::sync::{Arc, RwLock};
 
 /// an ipv4 prefix, e.g. `10.0.0.0/24` or a single host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +85,8 @@ impl FromStr for Ipv4Prefix {
 pub enum RouteSource {
     /// configured by hand.
     Static,
+    /// calculated from the exchanged topology.
+    Dynamic,
 }
 
 impl RouteSource {
@@ -91,6 +94,7 @@ impl RouteSource {
     pub fn as_str(self) -> &'static str {
         match self {
             RouteSource::Static => "static",
+            RouteSource::Dynamic => "dynamic",
         }
     }
 }
@@ -116,6 +120,16 @@ impl Route {
             next_hop,
             metric: 1,
             source: RouteSource::Static,
+        }
+    }
+
+    /// a host route learned from the topology, with its path cost as metric.
+    pub fn dynamic(addr: Ipv4Addr, next_hop: SocketAddr, metric: u32) -> Self {
+        Self {
+            dest: Ipv4Prefix::host(addr),
+            next_hop,
+            metric,
+            source: RouteSource::Dynamic,
         }
     }
 }
@@ -196,6 +210,46 @@ impl RoutingTable {
                     .cmp(&a.dest.prefix_len())
                     .then(a.metric.cmp(&b.metric))
             })
+    }
+}
+
+/// a shared, swappable handle to the current routing table.
+///
+/// the forwarding path reads the table it needs, while the control plane
+/// publishes whole new immutable tables. readers never block writers for long:
+/// `current` clones an `Arc` and `publish` replaces the `Arc` in one shot, so a
+/// reader always sees a consistent table.
+#[derive(Debug, Clone, Default)]
+pub struct RouteSnapshot {
+    inner: Arc<RwLock<Arc<RoutingTable>>>,
+}
+
+impl RouteSnapshot {
+    /// start with `table` as the current snapshot.
+    pub fn new(table: RoutingTable) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(Arc::new(table))),
+        }
+    }
+
+    /// the current table, as an immutable snapshot.
+    pub fn current(&self) -> Arc<RoutingTable> {
+        self.read().clone()
+    }
+
+    /// replace the current table with a new snapshot.
+    pub fn publish(&self, table: RoutingTable) {
+        let mut guard = self
+            .inner
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = Arc::new(table);
+    }
+
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, Arc<RoutingTable>> {
+        self.inner
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -317,6 +371,26 @@ mod tests {
         let table = RoutingTable::new(vec![Route::host(ip("10.0.0.3"), hop(3))]);
         assert!(table.lookup(ip("10.0.0.4")).is_none());
         assert!(RoutingTable::default().lookup(ip("10.0.0.3")).is_none());
+    }
+
+    #[test]
+    fn route_snapshot_publishes_immutable_tables() {
+        let snapshot =
+            RouteSnapshot::new(RoutingTable::new(vec![Route::host(ip("10.0.0.3"), hop(3))]));
+        assert_eq!(
+            snapshot.current().lookup(ip("10.0.0.3")).unwrap().next_hop,
+            hop(3)
+        );
+
+        snapshot.publish(RoutingTable::new(vec![Route::dynamic(
+            ip("10.0.0.4"),
+            hop(4),
+            2,
+        )]));
+        let current = snapshot.current();
+        assert!(current.lookup(ip("10.0.0.3")).is_none());
+        assert_eq!(current.lookup(ip("10.0.0.4")).unwrap().next_hop, hop(4));
+        assert_eq!(current.routes()[0].source, RouteSource::Dynamic);
     }
 
     #[test]

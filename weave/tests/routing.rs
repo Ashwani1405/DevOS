@@ -16,7 +16,7 @@ use tokio::time::timeout;
 
 use weave::overlay::{self, OverlayConfig};
 use weave::peer::PeerSet;
-use weave::route::{Route, RoutingTable};
+use weave::route::{Route, RouteSnapshot, RoutingTable};
 use weave::tun::{PacketReader, PacketWriter};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
@@ -108,8 +108,9 @@ fn spawn_node(
         local: vec![local.parse().unwrap()],
         mtu: 1420,
         queue_depth: 64,
-        routes: Arc::new(RoutingTable::new(routes)),
+        routes: RouteSnapshot::new(RoutingTable::new(routes)),
         peers,
+        control: None,
     };
     let (stop, stop_rx) = watch::channel(false);
     let handle = tokio::spawn(overlay::run(reader, writer, config, socket, stop_rx));

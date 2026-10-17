@@ -133,7 +133,9 @@ TUN and covers:
 - one UDP socket per node; there is no per-peer queue, so a full outbound queue
   drops forwarded packets (tun-originated packets still push back).
 
-## What remains for M5
+## What M5 added
 
 Topology-driven route updates, link-failure detection, and automatic recovery
-over an alternate path.
+over an alternate path. See [`09-m5-topology.md`](./09-m5-topology.md). The
+static routes and forwarding described here are unchanged; M5 adds the
+`--neighbor` control plane and keeps any `--route`s in the published table.

@@ -2,15 +2,31 @@
 //!
 //!   [ version 1B ][ len 2B BE ][ payload 0..N ]
 //!
-//! version is 1 for now. len has to match the payload bytes or the frame is
-//! dropped. datagram cap is MAX_DATAGRAM_SIZE, so the body caps at
-//! MAX_PAYLOAD_LEN.
+//! len has to match the payload bytes or the frame is dropped. datagram cap is
+//! MAX_DATAGRAM_SIZE, so the body caps at MAX_PAYLOAD_LEN.
+//!
+//! the version byte says what the body means:
+//! - `VERSION` (1): the body is a raw ip packet, ready to forward.
+//! - `CONTROL_VERSION` (2): the body is a topology control message, handled by
+//!   the control plane (`control.rs`) instead of being forwarded.
 
 use std::error::Error;
 use std::fmt;
 
 /// bump this when the layout changes
 pub const VERSION: u8 = 1;
+
+/// version byte for control-plane frames. the body is a `control::Message`.
+pub const CONTROL_VERSION: u8 = 2;
+
+/// a parsed frame, tagged by what the body means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Frame<'a> {
+    /// a raw ip packet to forward or deliver.
+    Packet(&'a [u8]),
+    /// a topology control message.
+    Control(&'a [u8]),
+}
 
 /// version + 2 byte length
 pub const HEADER_LEN: usize = 3;
@@ -24,6 +40,15 @@ pub const MAX_PAYLOAD_LEN: usize = MAX_DATAGRAM_SIZE - HEADER_LEN;
 /// pack payload into [version][len][payload].
 /// errors if the payload is longer than MAX_PAYLOAD_LEN.
 pub fn encode(payload: &[u8]) -> Result<Vec<u8>, WireError> {
+    encode_versioned(VERSION, payload)
+}
+
+/// pack a topology control message into a control frame.
+pub fn encode_control(payload: &[u8]) -> Result<Vec<u8>, WireError> {
+    encode_versioned(CONTROL_VERSION, payload)
+}
+
+fn encode_versioned(version: u8, payload: &[u8]) -> Result<Vec<u8>, WireError> {
     if payload.len() > MAX_PAYLOAD_LEN {
         return Err(WireError::PayloadTooLarge {
             len: payload.len(),
@@ -33,15 +58,35 @@ pub fn encode(payload: &[u8]) -> Result<Vec<u8>, WireError> {
 
     let payload_len = payload.len() as u16;
     let mut bytes = Vec::with_capacity(HEADER_LEN + payload.len());
-    bytes.push(VERSION);
+    bytes.push(version);
     bytes.extend_from_slice(&payload_len.to_be_bytes());
     bytes.extend_from_slice(payload);
     Ok(bytes)
 }
 
 /// parse and validate a datagram, returning the payload. anything malformed
-/// comes back as an error.
+/// comes back as an error. only accepts ip-packet frames (version 1).
 pub fn decode(datagram: &[u8]) -> Result<&[u8], WireError> {
+    let (version, body) = parse(datagram)?;
+    if version != VERSION {
+        return Err(WireError::UnsupportedVersion(version));
+    }
+    Ok(body)
+}
+
+/// parse and validate a datagram, returning the tagged frame. accepts both
+/// packet and control frames.
+pub fn decode_frame(datagram: &[u8]) -> Result<Frame<'_>, WireError> {
+    let (version, body) = parse(datagram)?;
+    match version {
+        VERSION => Ok(Frame::Packet(body)),
+        CONTROL_VERSION => Ok(Frame::Control(body)),
+        other => Err(WireError::UnsupportedVersion(other)),
+    }
+}
+
+/// validate the common header and return the version plus body.
+fn parse(datagram: &[u8]) -> Result<(u8, &[u8]), WireError> {
     if datagram.len() > MAX_DATAGRAM_SIZE {
         return Err(WireError::DatagramTooLarge {
             len: datagram.len(),
@@ -55,10 +100,6 @@ pub fn decode(datagram: &[u8]) -> Result<&[u8], WireError> {
     }
 
     let version = datagram[0];
-    if version != VERSION {
-        return Err(WireError::UnsupportedVersion(version));
-    }
-
     let declared = u16::from_be_bytes([datagram[1], datagram[2]]) as usize;
     let body = &datagram[HEADER_LEN..];
     if declared != body.len() {
@@ -68,7 +109,7 @@ pub fn decode(datagram: &[u8]) -> Result<&[u8], WireError> {
         });
     }
 
-    Ok(body)
+    Ok((version, body))
 }
 
 /// everything encode/decode can fail with
@@ -203,6 +244,36 @@ mod tests {
                 len: MAX_DATAGRAM_SIZE + 1,
                 max: MAX_DATAGRAM_SIZE,
             })
+        );
+    }
+
+    #[test]
+    fn control_frames_round_trip() {
+        let body = b"control body";
+        let bytes = encode_control(body).expect("encode");
+        assert_eq!(bytes[0], CONTROL_VERSION);
+        assert_eq!(decode_frame(&bytes).expect("decode"), Frame::Control(body));
+        // the packet-only decoder still refuses a control frame.
+        assert_eq!(
+            decode(&bytes),
+            Err(WireError::UnsupportedVersion(CONTROL_VERSION))
+        );
+    }
+
+    #[test]
+    fn decode_frame_tags_packet_frames() {
+        let bytes = encode(b"packet").expect("encode");
+        assert_eq!(
+            decode_frame(&bytes).expect("decode"),
+            Frame::Packet(b"packet")
+        );
+    }
+
+    #[test]
+    fn decode_frame_rejects_unknown_version() {
+        assert_eq!(
+            decode_frame(&[0x07, 0x00, 0x00]),
+            Err(WireError::UnsupportedVersion(0x07))
         );
     }
 

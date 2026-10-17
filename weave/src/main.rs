@@ -1,7 +1,9 @@
 use std::error::Error;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use tokio::sync::watch;
@@ -9,14 +11,18 @@ use tokio::task::JoinError;
 use tracing::{info, warn};
 
 use weave::peer::PeerSet;
-use weave::route::{Route, RouteSpec, RoutingTable};
+use weave::route::{Route, RouteSnapshot, RouteSpec, RoutingTable};
+use weave::router::{Neighbor, RouterConfig};
+use weave::topology::NodeId;
 use weave::{overlay, transport, tun, wire};
 
 /// weave.
 ///
 /// two nodes with `--peer` pointing at each other exchange a message. with
 /// `--tun`, overlay addresses and `--route`s they move ip packets, hopping
-/// through intermediate peers as needed. no crypto, discovery or failover.
+/// through intermediate peers as needed. with `--neighbor`, peers exchange
+/// link state, calculate routes, and fail over to an alternate path when a
+/// link dies. no crypto or discovery.
 #[derive(Debug, Parser)]
 #[command(name = "weave", version, about, long_about)]
 struct Args {
@@ -48,6 +54,19 @@ struct Args {
     #[arg(long = "route", value_name = "PREFIX=ADDR:PORT", requires = "tun")]
     routes: Vec<RouteSpec>,
 
+    /// topology neighbour, repeatable: `<IP>=<ADDR:PORT>`. enables dynamic
+    /// routing: peers exchange link state and routes are calculated.
+    #[arg(long = "neighbor", value_name = "IP=ADDR:PORT", requires = "tun")]
+    neighbors: Vec<NeighborSpec>,
+
+    /// topology heartbeat interval in milliseconds (default 1000)
+    #[arg(long, value_name = "MS", requires = "tun")]
+    heartbeat_ms: Option<u64>,
+
+    /// how long a silent neighbour is trusted, in milliseconds (default 3000)
+    #[arg(long, value_name = "MS", requires = "tun")]
+    link_timeout_ms: Option<u64>,
+
     /// overlay mtu (default 1420)
     #[arg(long, value_name = "N", requires = "tun")]
     mtu: Option<u16>,
@@ -55,6 +74,31 @@ struct Args {
     /// packets buffered per direction (default 1024)
     #[arg(long, value_name = "N", requires = "tun", default_value_t = 1024)]
     queue_depth: usize,
+}
+
+/// a topology neighbour: `<overlay-ip>=<udp-addr>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NeighborSpec {
+    id: NodeId,
+    addr: SocketAddr,
+}
+
+impl FromStr for NeighborSpec {
+    type Err = io::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (ip, addr) = s
+            .split_once('=')
+            .ok_or_else(|| missing(&format!("invalid neighbour spec: {s}")))?;
+        let id = ip
+            .parse::<Ipv4Addr>()
+            .map(NodeId)
+            .map_err(|_| missing(&format!("invalid neighbour overlay address: {ip}")))?;
+        let addr = addr
+            .parse::<SocketAddr>()
+            .map_err(|_| missing(&format!("invalid neighbour endpoint: {addr}")))?;
+        Ok(Self { id, addr })
+    }
 }
 
 /// default overlay mtu.
@@ -129,30 +173,45 @@ async fn run_overlay(args: Args) -> Result<(), Box<dyn Error>> {
         .into());
     }
 
-    let mut routes: Vec<Route> = args
+    let routes: Vec<Route> = args
         .routes
         .iter()
         .copied()
         .map(RouteSpec::into_route)
         .collect();
-    // keep the two-node setup working: a single peer and no routes means reach
-    // that peer's overlay address directly.
-    if routes.is_empty() && args.peers.len() == 1 {
+    let neighbors: Vec<Neighbor> = args
+        .neighbors
+        .iter()
+        .map(|spec| Neighbor {
+            id: spec.id,
+            addr: spec.addr,
+        })
+        .collect();
+
+    // keep the two-node setup working: a single peer, no routes and no topology
+    // means reach that peer's overlay address directly.
+    let mut routes = routes;
+    if routes.is_empty() && neighbors.is_empty() && args.peers.len() == 1 {
         routes.push(Route::host(peer_address, args.peers[0]));
         info!(peer = %args.peers[0], dest = %peer_address, "added a direct route to the peer");
     }
-    if routes.is_empty() {
+    if routes.is_empty() && neighbors.is_empty() {
         return Err(missing(
-            "--tun needs at least one --route (or a single --peer to route to --peer-address)",
+            "--tun needs at least one --route, --neighbor, or a single --peer to route to --peer-address",
         )
         .into());
     }
 
-    // a node accepts from its configured peers and from any next hop in its routes.
+    // a node accepts from its configured peers, route next hops and neighbours.
     let mut peer_addrs = args.peers.clone();
     for route in &routes {
         if !peer_addrs.contains(&route.next_hop) {
             peer_addrs.push(route.next_hop);
+        }
+    }
+    for neighbor in &neighbors {
+        if !peer_addrs.contains(&neighbor.addr) {
+            peer_addrs.push(neighbor.addr);
         }
     }
     for route in &routes {
@@ -173,14 +232,35 @@ async fn run_overlay(args: Args) -> Result<(), Box<dyn Error>> {
     let (reader, writer) = device.split()?;
 
     let socket = transport::bind(args.bind).await?;
+    let local_addr = socket.local_addr()?;
     info!(bind = %args.bind, %address, "weave overlay listening");
+
+    let control = if neighbors.is_empty() {
+        None
+    } else {
+        let mut config = RouterConfig::new(NodeId(address), local_addr, neighbors);
+        config.base_routes = routes.clone();
+        if let Some(ms) = args.heartbeat_ms {
+            config.heartbeat = Duration::from_millis(ms.max(1));
+        }
+        if let Some(ms) = args.link_timeout_ms {
+            config.link_timeout = Duration::from_millis(ms.max(1));
+        }
+        info!(
+            heartbeat_ms = config.heartbeat.as_millis() as u64,
+            link_timeout_ms = config.link_timeout.as_millis() as u64,
+            "topology routing enabled"
+        );
+        Some(config)
+    };
 
     let overlay_config = overlay::OverlayConfig {
         local: vec![address],
         mtu: usize::from(mtu),
         queue_depth: args.queue_depth,
-        routes: Arc::new(RoutingTable::new(routes)),
+        routes: RouteSnapshot::new(RoutingTable::new(routes)),
         peers: Arc::new(PeerSet::new(peer_addrs)),
+        control,
     };
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

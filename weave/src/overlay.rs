@@ -14,10 +14,12 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
+use crate::control;
 use crate::forward::{self, Decision, DropReason};
 use crate::packet;
 use crate::peer::PeerSet;
-use crate::route::RoutingTable;
+use crate::route::RouteSnapshot;
+use crate::router::{self, Router, RouterConfig};
 use crate::transport;
 use crate::tun::{PacketReader, PacketWriter};
 use crate::wire::{self, MAX_DATAGRAM_SIZE};
@@ -34,10 +36,12 @@ pub struct OverlayConfig {
     pub mtu: usize,
     /// packets buffered per direction before reads block.
     pub queue_depth: usize,
-    /// where each destination prefix is sent.
-    pub routes: Arc<RoutingTable>,
+    /// the current routing table, swappable by the control plane.
+    pub routes: RouteSnapshot,
     /// peers we accept from, and whether each may be used as a next hop.
     pub peers: Arc<PeerSet>,
+    /// topology control plane settings. `None` keeps the m4 static behaviour.
+    pub control: Option<RouterConfig>,
 }
 
 /// run until shutdown or a task fails.
@@ -60,9 +64,14 @@ where
     // bounded queues: outbound carries (next hop, packet), inbound carries packets for the tun.
     let (outbound_tx, outbound_rx) = mpsc::channel::<Outbound>(config.queue_depth);
     let (inbound_tx, inbound_rx) = mpsc::channel::<Vec<u8>>(config.queue_depth);
+    // control messages decoded from the wire, tagged with their udp source.
+    let (control_tx, control_rx) =
+        mpsc::channel::<(SocketAddr, control::Message)>(config.queue_depth);
 
     // internal stop signal, so any finishing task can stop the others.
     let (stop_tx, stop_rx) = watch::channel(false);
+
+    let control_config = config.control.clone();
 
     let mut tasks = JoinSet::new();
     tasks.spawn(tun_to_outbound(
@@ -76,11 +85,33 @@ where
         socket.clone(),
         stop_rx.clone(),
     ));
+
+    // the control plane owns the topology and republishes routes. without a
+    // config we drain the receiver so sends from the receive task are harmless.
+    let control_sender = match control_config {
+        Some(router_config) => {
+            let router = Router::new(router_config, config.peers.clone(), config.routes.clone());
+            tasks.spawn(router::run(
+                router,
+                socket.clone(),
+                control_rx,
+                stop_rx.clone(),
+            ));
+            Some(control_tx)
+        }
+        None => {
+            drop(control_rx);
+            drop(control_tx);
+            None
+        }
+    };
+
     tasks.spawn(udp_to_outbound(
         socket,
         inbound_tx,
         outbound_tx,
         config,
+        control_sender,
         stop_rx.clone(),
     ));
     tasks.spawn(inbound_to_tun(inbound_rx, writer, stop_rx));
@@ -148,7 +179,8 @@ async fn tun_to_outbound<R: PacketReader>(
                     warn!(error = %err, len, "dropped outbound packet");
                     continue;
                 }
-                match forward::decide(packet, &config.local, &config.routes, &config.peers, None) {
+                let routes = config.routes.current();
+                match forward::decide(packet, &config.local, &routes, &config.peers, None) {
                     Decision::Forward { next_hop } => {
                         if outbound.send((next_hop, packet.to_vec())).await.is_err() {
                             return Ok(());
@@ -196,6 +228,7 @@ async fn udp_to_outbound(
     inbound: mpsc::Sender<Vec<u8>>,
     outbound: mpsc::Sender<Outbound>,
     config: OverlayConfig,
+    control: Option<mpsc::Sender<(SocketAddr, control::Message)>>,
     mut stop: watch::Receiver<bool>,
 ) -> io::Result<()> {
     let mut buf = vec![0u8; MAX_DATAGRAM_SIZE + 1];
@@ -217,8 +250,12 @@ async fn udp_to_outbound(
                     warn!(%from, "ignored datagram from unknown address");
                     continue;
                 }
-                let packet = match wire::decode(&buf[..len]) {
-                    Ok(payload) => payload,
+                let packet = match wire::decode_frame(&buf[..len]) {
+                    Ok(wire::Frame::Packet(payload)) => payload,
+                    Ok(wire::Frame::Control(body)) => {
+                        deliver_control(&control, from, body).await;
+                        continue;
+                    }
                     Err(err) => {
                         warn!(%from, error = %err, "dropped malformed datagram");
                         continue;
@@ -228,7 +265,8 @@ async fn udp_to_outbound(
                     warn!(%from, error = %err, "dropped invalid ip packet");
                     continue;
                 }
-                match forward::decide(packet, &config.local, &config.routes, &config.peers, Some(from)) {
+                let routes = config.routes.current();
+                match forward::decide(packet, &config.local, &routes, &config.peers, Some(from)) {
                     Decision::Deliver => {
                         if inbound.send(packet.to_vec()).await.is_err() {
                             return Ok(());
@@ -251,6 +289,26 @@ async fn udp_to_outbound(
                 }
             }
         }
+    }
+}
+
+// decode a control frame and hand it to the router, if one is running.
+async fn deliver_control(
+    control: &Option<mpsc::Sender<(SocketAddr, control::Message)>>,
+    from: SocketAddr,
+    body: &[u8],
+) {
+    let Some(sender) = control else {
+        debug!(%from, "ignored control message (topology disabled)");
+        return;
+    };
+    match control::decode(body) {
+        Ok(message) => {
+            if sender.send((from, message)).await.is_err() {
+                debug!(%from, "control plane is not accepting messages");
+            }
+        }
+        Err(err) => warn!(%from, error = %err, "dropped malformed control message"),
     }
 }
 
@@ -282,7 +340,7 @@ async fn inbound_to_tun<W: PacketWriter>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::route::Route;
+    use crate::route::{Route, RoutingTable};
     use std::future::Future;
     use tokio::time::{timeout, Duration};
 
@@ -368,8 +426,9 @@ mod tests {
             local: vec![local.parse().unwrap()],
             mtu: 1420,
             queue_depth: 16,
-            routes: Arc::new(RoutingTable::new(routes)),
+            routes: RouteSnapshot::new(RoutingTable::new(routes)),
             peers: Arc::new(PeerSet::new(peers)),
+            control: None,
         }
     }
 
