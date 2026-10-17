@@ -1,45 +1,45 @@
-//! ip packet validation for the overlay.
+//! ip packet validation.
 //!
-//! before a packet goes anywhere we check it is well formed: a known ip
-//! version, a header that fits, and a declared length that lines up with the
-//! bytes we actually got. anything else is dropped, never forwarded.
+//! checks the ip version, header length and total length before a packet is
+//! forwarded. bad packets are dropped.
 
 use std::error::Error;
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/// smallest possible ipv4 header, with no options.
+/// smallest ipv4 header, no options.
 pub const IPV4_MIN_HEADER_LEN: usize = 20;
 
-/// ipv6 has a fixed size header.
+/// ipv6 header size, fixed.
 pub const IPV6_HEADER_LEN: usize = 40;
 
-/// why a packet didn't validate.
+/// packet validation errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PacketError {
-    /// too few bytes to even hold the header.
+    /// not enough bytes for a header.
     TooShort {
-        /// bytes we actually got.
+        /// bytes received.
         len: usize,
     },
-    /// first nibble wasn't 4 or 6.
+    /// ip version nibble is not 4 or 6.
     UnsupportedVersion(u8),
-    /// ipv4 ihl is below the minimum or points past the end of the slice.
+    /// ipv4 ihl below 5, or header longer than the packet.
     InvalidIpv4HeaderLen {
-        /// internet header length in 32-bit words.
+        /// ipv4 header length in 32-bit words.
         ihl: u8,
-        /// bytes we actually got.
+        /// bytes received.
         len: usize,
     },
-    /// the header's total length doesn't match the bytes present.
+    /// total length field does not match the packet size.
     LengthMismatch {
-        /// total length taken from the header.
+        /// length from the header.
         declared: usize,
-        /// bytes actually present.
+        /// bytes received.
         actual: usize,
     },
 }
 
-/// check that a slice is a well-formed ipv4 or ipv6 packet.
+/// check a slice is a valid ipv4 or ipv6 packet.
 pub fn validate(packet: &[u8]) -> Result<(), PacketError> {
     let Some(&first) = packet.first() else {
         return Err(PacketError::TooShort { len: 0 });
@@ -92,6 +92,80 @@ fn validate_ipv6(packet: &[u8]) -> Result<(), PacketError> {
     }
 
     Ok(())
+}
+
+/// the destination address of a valid packet, v4 or v6.
+///
+/// returns `None` for anything `validate` would reject. callers that already
+/// validated can treat this as infallible.
+pub fn destination(packet: &[u8]) -> Option<IpAddr> {
+    match packet.first().map(|first| first >> 4)? {
+        4 if packet.len() >= IPV4_MIN_HEADER_LEN => Some(IpAddr::V4(Ipv4Addr::new(
+            packet[16], packet[17], packet[18], packet[19],
+        ))),
+        6 if packet.len() >= IPV6_HEADER_LEN => {
+            let mut octets = [0u8; 16];
+            octets.copy_from_slice(&packet[24..40]);
+            Some(IpAddr::V6(Ipv6Addr::from(octets)))
+        }
+        _ => None,
+    }
+}
+
+/// the ipv4 ttl or ipv6 hop limit of a valid packet.
+pub fn hop_limit(packet: &[u8]) -> Option<u8> {
+    match packet.first().map(|first| first >> 4)? {
+        4 if packet.len() >= IPV4_MIN_HEADER_LEN => Some(packet[8]),
+        6 if packet.len() >= IPV6_HEADER_LEN => Some(packet[7]),
+        _ => None,
+    }
+}
+
+/// decrement the ttl or hop limit in place, fixing the ipv4 header checksum.
+///
+/// returns false when the hop limit was already 1 (or the packet isn't a
+/// well-formed v4/v6 packet), meaning the packet must be dropped rather than
+/// forwarded.
+pub fn decrement_hop_limit(packet: &mut [u8]) -> bool {
+    match packet.first().map(|first| first >> 4) {
+        Some(4) if packet.len() >= IPV4_MIN_HEADER_LEN => {
+            if packet[8] <= 1 {
+                return false;
+            }
+            packet[8] -= 1;
+            let header_len = usize::from(packet[0] & 0x0f) * 4;
+            packet[10] = 0;
+            packet[11] = 0;
+            let checksum = ipv4_checksum(&packet[..header_len]);
+            packet[10..12].copy_from_slice(&checksum.to_be_bytes());
+            true
+        }
+        Some(6) if packet.len() >= IPV6_HEADER_LEN => {
+            if packet[7] <= 1 {
+                return false;
+            }
+            packet[7] -= 1;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// internet checksum over an ipv4 header, which must have a zeroed checksum field.
+fn ipv4_checksum(header: &[u8]) -> u16 {
+    let mut sum: u32 = 0;
+    for chunk in header.chunks(2) {
+        let word = match chunk {
+            [high, low] => u16::from_be_bytes([*high, *low]),
+            [high] => u16::from(*high) << 8,
+            _ => 0,
+        };
+        sum += u32::from(word);
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
 }
 
 impl fmt::Display for PacketError {
@@ -223,5 +297,74 @@ mod tests {
                 actual: IPV6_HEADER_LEN + 8
             })
         );
+    }
+
+    #[test]
+    fn reads_ipv4_destination_and_hop_limit() {
+        let mut packet = ipv4(20);
+        packet[8] = 64;
+        packet[16..20].copy_from_slice(&[10, 0, 0, 3]);
+        assert_eq!(destination(&packet), Some("10.0.0.3".parse().unwrap()));
+        assert_eq!(hop_limit(&packet), Some(64));
+    }
+
+    #[test]
+    fn reads_ipv6_destination_and_hop_limit() {
+        let mut packet = ipv6(0);
+        packet[7] = 32;
+        packet[24..40].copy_from_slice(&"2001:db8::1".parse::<Ipv6Addr>().unwrap().octets());
+        assert_eq!(destination(&packet), Some("2001:db8::1".parse().unwrap()));
+        assert_eq!(hop_limit(&packet), Some(32));
+    }
+
+    #[test]
+    fn destination_and_hop_limit_reject_bad_packets() {
+        assert_eq!(destination(&[]), None);
+        assert_eq!(destination(&[0x30, 0, 0]), None);
+        assert_eq!(hop_limit(&ipv4(19)), None);
+    }
+
+    #[test]
+    fn decrementing_ipv4_ttl_fixes_the_checksum() {
+        let mut packet = ipv4(20);
+        packet[8] = 10;
+        assert!(decrement_hop_limit(&mut packet));
+        assert_eq!(hop_limit(&packet), Some(9));
+
+        // a correct checksum makes the ones-complement sum over the header 0xffff
+        let header_len = usize::from(packet[0] & 0x0f) * 4;
+        let mut sum = 0u32;
+        for chunk in packet[..header_len].chunks(2) {
+            sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+        }
+        while sum >> 16 != 0 {
+            sum = (sum & 0xffff) + (sum >> 16);
+        }
+        assert_eq!(sum as u16, 0xffff);
+    }
+
+    #[test]
+    fn decrementing_reports_expiry() {
+        let mut v4 = ipv4(20);
+        v4[8] = 1;
+        assert!(!decrement_hop_limit(&mut v4));
+        assert_eq!(hop_limit(&v4), Some(1), "expired packet is left untouched");
+
+        let mut v6 = ipv6(0);
+        v6[7] = 1;
+        assert!(!decrement_hop_limit(&mut v6));
+        assert_eq!(hop_limit(&v6), Some(1));
+
+        let mut zero = ipv4(20);
+        zero[8] = 0;
+        assert!(!decrement_hop_limit(&mut zero));
+    }
+
+    #[test]
+    fn decrementing_ipv6_hop_limit() {
+        let mut packet = ipv6(0);
+        packet[7] = 5;
+        assert!(decrement_hop_limit(&mut packet));
+        assert_eq!(hop_limit(&packet), Some(4));
     }
 }

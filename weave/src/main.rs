@@ -1,19 +1,22 @@
 use std::error::Error;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 
 use clap::Parser;
 use tokio::sync::watch;
 use tokio::task::JoinError;
 use tracing::{info, warn};
 
+use weave::peer::PeerSet;
+use weave::route::{Route, RouteSpec, RoutingTable};
 use weave::{overlay, transport, tun, wire};
 
-/// weave - a udp transport.
+/// weave.
 ///
-/// run two with --peer pointing at each other to exchange a frame. add --tun
-/// with overlay addresses to forward real ip packets between tun interfaces
-/// instead. no crypto, no routing, no delivery guarantees.
+/// two nodes with `--peer` pointing at each other exchange a message. with
+/// `--tun`, overlay addresses and `--route`s they move ip packets, hopping
+/// through intermediate peers as needed. no crypto, discovery or failover.
 #[derive(Debug, Parser)]
 #[command(name = "weave", version, about, long_about)]
 struct Args {
@@ -21,9 +24,9 @@ struct Args {
     #[arg(long, value_name = "ADDR:PORT")]
     bind: SocketAddr,
 
-    /// peer endpoint, e.g. 127.0.0.1:4001
-    #[arg(long, value_name = "ADDR:PORT")]
-    peer: Option<SocketAddr>,
+    /// peer endpoint, repeatable, e.g. 127.0.0.1:4001
+    #[arg(long = "peer", value_name = "ADDR:PORT")]
+    peers: Vec<SocketAddr>,
 
     /// bring up a tun interface and forward ip packets instead of the dev message
     #[arg(long)]
@@ -41,16 +44,20 @@ struct Args {
     #[arg(long, value_name = "IP", requires = "tun")]
     peer_address: Option<Ipv4Addr>,
 
+    /// static route, repeatable: `<prefix>=<ADDR:PORT>`, e.g. 10.0.0.3/32=127.0.0.1:4003
+    #[arg(long = "route", value_name = "PREFIX=ADDR:PORT", requires = "tun")]
+    routes: Vec<RouteSpec>,
+
     /// overlay mtu (default 1420)
     #[arg(long, value_name = "N", requires = "tun")]
     mtu: Option<u16>,
 
-    /// packets allowed to queue per direction before we stop reading (default 1024)
+    /// packets buffered per direction (default 1024)
     #[arg(long, value_name = "N", requires = "tun", default_value_t = 1024)]
     queue_depth: usize,
 }
 
-/// default overlay mtu, leaves room for the udp and frame headers.
+/// default overlay mtu.
 const DEFAULT_MTU: u16 = 1420;
 
 #[tokio::main]
@@ -75,7 +82,7 @@ async fn run_message(args: Args) -> Result<(), Box<dyn Error>> {
     let socket = transport::bind(args.bind).await?;
     info!(bind = %args.bind, "weave node listening");
 
-    if let Some(peer) = args.peer {
+    if let Some(peer) = args.peers.first().copied() {
         let payload = format!("hello from {}", args.bind);
         transport::send_message(&socket, peer, payload.as_bytes()).await?;
         info!(%peer, "sent initial data message");
@@ -106,9 +113,6 @@ async fn run_message(args: Args) -> Result<(), Box<dyn Error>> {
 }
 
 async fn run_overlay(args: Args) -> Result<(), Box<dyn Error>> {
-    let peer = args
-        .peer
-        .ok_or_else(|| missing("--peer is required together with --tun"))?;
     let address = args
         .address
         .ok_or_else(|| missing("--address is required together with --tun"))?;
@@ -125,6 +129,36 @@ async fn run_overlay(args: Args) -> Result<(), Box<dyn Error>> {
         .into());
     }
 
+    let mut routes: Vec<Route> = args
+        .routes
+        .iter()
+        .copied()
+        .map(RouteSpec::into_route)
+        .collect();
+    // keep the two-node setup working: a single peer and no routes means reach
+    // that peer's overlay address directly.
+    if routes.is_empty() && args.peers.len() == 1 {
+        routes.push(Route::host(peer_address, args.peers[0]));
+        info!(peer = %args.peers[0], dest = %peer_address, "added a direct route to the peer");
+    }
+    if routes.is_empty() {
+        return Err(missing(
+            "--tun needs at least one --route (or a single --peer to route to --peer-address)",
+        )
+        .into());
+    }
+
+    // a node accepts from its configured peers and from any next hop in its routes.
+    let mut peer_addrs = args.peers.clone();
+    for route in &routes {
+        if !peer_addrs.contains(&route.next_hop) {
+            peer_addrs.push(route.next_hop);
+        }
+    }
+    for route in &routes {
+        info!(dest = %route.dest, next_hop = %route.next_hop, source = route.source.as_str(), "route configured");
+    }
+
     let tun_config = tun::TunConfig {
         name: args.tun_name.clone(),
         address,
@@ -139,12 +173,14 @@ async fn run_overlay(args: Args) -> Result<(), Box<dyn Error>> {
     let (reader, writer) = device.split()?;
 
     let socket = transport::bind(args.bind).await?;
-    info!(bind = %args.bind, %peer, %address, %peer_address, "weave overlay listening");
+    info!(bind = %args.bind, %address, "weave overlay listening");
 
     let overlay_config = overlay::OverlayConfig {
-        peer,
+        local: vec![address],
         mtu: usize::from(mtu),
         queue_depth: args.queue_depth,
+        routes: Arc::new(RoutingTable::new(routes)),
+        peers: Arc::new(PeerSet::new(peer_addrs)),
     };
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

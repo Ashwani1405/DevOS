@@ -1,4 +1,4 @@
-//! tests that need a real interface, and therefore root. ignored by default.
+//! test that opens a real interface, so it needs root. ignored by default.
 //! run with `sudo cargo test --test tun_open -- --ignored`.
 
 use weave::tun::{TunConfig, TunDevice};

@@ -4,8 +4,13 @@ Weave is a peer-to-peer Layer-3 overlay network written in Rust. The idea is a
 virtual network on top of the physical one, so peers can exchange IP packets
 without a direct link between them.
 
-This repo only has the UDP transport so far. TUN devices, packet forwarding,
-encryption, peer discovery, routing, and failure detection aren't built yet.
+This repo has the UDP transport (M1), the two-node TUN overlay (M2), and
+multi-hop routing with static routes (M4). Peer lifecycle/probing (M3) is not
+implemented yet; a minimal peer-availability stand-in is used by routing.
+Encryption, discovery, and automatic failover aren't built yet.
+
+See [`docs/08-m4-routing.md`](./docs/08-m4-routing.md) for multi-hop routing,
+route configuration, and test steps.
 
 ## The transport
 
@@ -76,9 +81,13 @@ CLI options:
 
 ```text
 --bind <ADDR:PORT>   local UDP address to bind (required)
---peer <ADDR:PORT>   peer to send one message to at startup (optional)
--h, --help           print help
--V, --version        print version
+--peer <ADDR:PORT>   peer endpoint, repeatable (message mode sends to the first)
+--tun                 run the TUN overlay instead of message mode
+--address <IP>        this node's overlay address (with --tun)
+--peer-address <IP>   the peer's overlay address (with --tun)
+--route <P=ADDR:PORT> static route, repeatable (with --tun)
+-h, --help            print help
+-V, --version         print version
 ```
 
 ## Development
@@ -91,18 +100,18 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 ```
 
-Tests are in `src/wire.rs` (encoding) and `tests/transport.rs` (sockets, message
-exchange, sender id, bad input, shutdown). They use random free ports and short
+Tests live beside the modules in `src/` (`wire`, `packet`, `route`, `forward`,
+`peer`, `overlay`) and in `tests/` (`transport.rs`, `routing.rs`, and the
+root-only `tun_open.rs`). They use random free ports, a fake TUN, and short
 timeouts.
 
 ## Not done yet
 
 - no encryption or authentication
 - no delivery, ordering, or duplicate protection
-- peer addresses are set by hand, no discovery
-- no routing or multi-hop
-- no failover
-- no TUN device or packet forwarding
+- peer addresses and routes are set by hand, no discovery
+- no automatic failover between alternate paths
+- no peer lifecycle/probing (M3) yet; peer availability is a manual flag
 - the frame format is a placeholder and will change
 
 ## License

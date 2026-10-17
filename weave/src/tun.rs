@@ -1,51 +1,49 @@
 //! tun device handling.
 //!
-//! kept apart from the udp transport on purpose: this module only knows how to
-//! open an interface and move single ip packets. the forwarding policy lives in
-//! `overlay`.
+//! opens the interface and reads/writes single ip packets. udp and forwarding
+//! live in the other modules.
 //!
-//! opening needs root on every platform. on macos you get a `utun` interface
-//! and the name has to look like `utunN` (or be omitted, letting the kernel
-//! pick the next free one).
+//! needs root. on macos the device is a utun and the name is utunN, or leave it
+//! out and let the kernel choose.
 
 use std::future::Future;
 use std::io;
 use std::net::Ipv4Addr;
 
-/// read half of a tun interface. one call yields one ip packet.
+/// read side of a tun interface. one call returns one packet.
 pub trait PacketReader: Send + 'static {
-    /// read a single packet into `buf`, returning how many bytes it was.
+    /// read one packet into `buf`, returns its length.
     fn recv<'a>(
         &'a mut self,
         buf: &'a mut [u8],
     ) -> impl Future<Output = io::Result<usize>> + Send + 'a;
 }
 
-/// write half of a tun interface. one call injects one ip packet.
+/// write side of a tun interface. one call writes one packet.
 pub trait PacketWriter: Send + 'static {
-    /// inject a single packet.
+    /// write one packet.
     fn send<'a>(&'a mut self, packet: &'a [u8])
         -> impl Future<Output = io::Result<()>> + Send + 'a;
 }
 
-/// how to create and configure the interface.
+/// interface configuration.
 #[derive(Debug, Clone)]
 pub struct TunConfig {
-    /// requested name. on macos this is `utunN`; `None` lets the kernel choose.
+    /// requested name; `None` lets the kernel choose.
     pub name: Option<String>,
     /// overlay address for this node.
     pub address: Ipv4Addr,
-    /// the peer's overlay address (utun is point-to-point).
+    /// peer's overlay address.
     pub destination: Ipv4Addr,
     /// netmask; a single host is `255.255.255.255`.
     pub netmask: Ipv4Addr,
     /// interface mtu.
     pub mtu: u16,
-    /// let the platform library add routes for us.
+    /// let the platform library set up routes.
     pub enable_routing: bool,
 }
 
-/// an opened tun interface, ready to be split into reader and writer.
+/// an opened tun interface.
 pub struct TunDevice {
     device: tun::AsyncDevice,
 }
@@ -71,25 +69,24 @@ impl TunDevice {
         Ok(Self { device })
     }
 
-    /// split into independent read and write halves so the two directions can
-    /// run as separate tasks.
+    /// split into a reader and a writer.
     pub fn split(self) -> io::Result<(TunReader, TunWriter)> {
         let (writer, reader) = self.device.split()?;
         Ok((TunReader { reader }, TunWriter { writer }))
     }
 }
 
-/// read half of an opened interface.
+/// read side.
 pub struct TunReader {
     reader: tun::DeviceReader,
 }
 
-/// write half of an opened interface.
+/// write side.
 pub struct TunWriter {
     writer: tun::DeviceWriter,
 }
 
-#[allow(clippy::manual_async_fn)] // need the explicit `Send` bound for spawning
+#[allow(clippy::manual_async_fn)] // explicit `Send` bound is needed for spawn
 impl PacketReader for TunReader {
     fn recv<'a>(
         &'a mut self,
@@ -99,7 +96,7 @@ impl PacketReader for TunReader {
     }
 }
 
-#[allow(clippy::manual_async_fn)] // need the explicit `Send` bound for spawning
+#[allow(clippy::manual_async_fn)] // explicit `Send` bound is needed for spawn
 impl PacketWriter for TunWriter {
     fn send<'a>(
         &'a mut self,
