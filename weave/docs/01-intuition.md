@@ -71,9 +71,10 @@ rest of the docs zoom into each of those moments.
 
 ## What "done" looks like (and what isn't)
 
-**Done today:** a working, well-tested UDP frame transport.
+**Done today:** the UDP frame transport plus the layers built on it in later
+milestones (TUN overlay, multi-hop routing, topology-driven failover, endpoint
+migration, relay fallback, and Noise IK authentication of control messages).
 
-**Not done (intentionally):** encryption, authentication, peer discovery,
-routing/multi-hop, TUN device + IP packet forwarding, failure detection. The
-README "Not done yet" list is the roadmap. Every one of those is a *layer on
-top* of this transport, not a rewrite of it.
+**Not done (intentionally):** encryption of the *data* plane, peer discovery,
+and full NAT traversal. The README "Not done yet" list is the current roadmap.
+Every remaining item is a *layer on top* of this transport, not a rewrite of it.

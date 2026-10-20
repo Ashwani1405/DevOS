@@ -10,6 +10,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use crate::packet;
 use crate::peer::PeerSet;
 use crate::route::RoutingTable;
+use crate::topology::NodeId;
 
 /// what to do with a packet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,8 +19,12 @@ pub enum Decision {
     Deliver,
     /// send it to this peer.
     Forward {
-        /// the next hop.
+        /// the next hop's udp endpoint as the routing table knew it.
         next_hop: SocketAddr,
+        /// the next hop's logical identity, when the route carries one. the data
+        /// plane uses this to resolve the current endpoint and any relay
+        /// fallback; `None` means send straight to `next_hop`.
+        next_hop_id: Option<NodeId>,
     },
     /// give up on it.
     Drop(DropReason),
@@ -94,6 +99,7 @@ pub fn decide(
 
     Decision::Forward {
         next_hop: route.next_hop,
+        next_hop_id: route.next_hop_id,
     }
 }
 
@@ -141,7 +147,10 @@ mod tests {
         let peers = PeerSet::new([hop(3)]);
         assert_eq!(
             decide(&packet("10.0.0.3", 64), &[], &routes, &peers, Some(hop(2))),
-            Decision::Forward { next_hop: hop(3) }
+            Decision::Forward {
+                next_hop: hop(3),
+                next_hop_id: None
+            }
         );
     }
 
@@ -192,7 +201,10 @@ mod tests {
         let peers = PeerSet::new([hop(2)]);
         assert_eq!(
             decide(&packet("10.0.0.3", 1), &[], &routes, &peers, None),
-            Decision::Forward { next_hop: hop(2) },
+            Decision::Forward {
+                next_hop: hop(2),
+                next_hop_id: None
+            },
             "a local packet with ttl 1 can still be sent"
         );
     }

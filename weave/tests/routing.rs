@@ -111,6 +111,9 @@ fn spawn_node(
         routes: RouteSnapshot::new(RoutingTable::new(routes)),
         peers,
         control: None,
+        identity: None,
+        links: None,
+        serve_relay: false,
     };
     let (stop, stop_rx) = watch::channel(false);
     let handle = tokio::spawn(overlay::run(reader, writer, config, socket, stop_rx));
@@ -301,4 +304,54 @@ async fn cyclic_routes_do_not_forward_indefinitely() {
 
     a.shutdown().await;
     b.shutdown().await;
+}
+
+#[tokio::test]
+async fn repeated_startup_and_shutdown_is_clean() {
+    // lifecycle: the overlay spawns several tasks; starting and stopping it many
+    // times must not leak tasks, hang, or return an error.
+    for _ in 0..10 {
+        let (reader, writer, inject, _collect) = tun();
+        let (socket, _udp) = bind().await;
+        let (_, dead) = bind().await;
+        let node = spawn_node(
+            "10.0.0.1",
+            reader,
+            writer,
+            socket,
+            vec![host("10.0.0.2", dead)],
+            peers([dead]),
+        );
+        // leave a packet in flight while shutting down.
+        inject
+            .send(ipv4_packet("10.0.0.1", "10.0.0.2", 64, 8))
+            .expect("inject");
+        node.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn sustained_overload_on_a_bounded_queue_does_not_wedge() {
+    // resource: far more packets than the bounded queues hold must be dropped or
+    // backpressured, never buffered without limit, and the node must still stop
+    // promptly and cleanly.
+    let (reader, writer, inject, _collect) = tun();
+    let (socket, _udp) = bind().await;
+    let (_, dead) = bind().await;
+    let node = spawn_node(
+        "10.0.0.1",
+        reader,
+        writer,
+        socket,
+        vec![host("10.0.0.2", dead)],
+        peers([dead]),
+    );
+
+    for _ in 0..1000 {
+        inject
+            .send(ipv4_packet("10.0.0.1", "10.0.0.2", 64, 8))
+            .expect("inject");
+    }
+
+    node.shutdown().await;
 }

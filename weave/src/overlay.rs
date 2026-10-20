@@ -14,18 +14,27 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
-use crate::control;
+use crate::connectivity::{Link, LinkSnapshot};
 use crate::forward::{self, Decision, DropReason};
 use crate::packet;
 use crate::peer::PeerSet;
+use crate::relay;
 use crate::route::RouteSnapshot;
-use crate::router::{self, Router, RouterConfig};
+use crate::router::{self, Inbound, Router, RouterConfig};
+use crate::topology::NodeId;
 use crate::transport;
 use crate::tun::{PacketReader, PacketWriter};
 use crate::wire::{self, MAX_DATAGRAM_SIZE};
 
-/// one packet on its way to a peer.
-type Outbound = (SocketAddr, Vec<u8>);
+/// one datagram on its way out: either a plain overlay packet to a peer, or a
+/// relay envelope body to a relay.
+#[derive(Debug)]
+enum Outbound {
+    /// a packet frame for this udp endpoint.
+    Data(SocketAddr, Vec<u8>),
+    /// a relay envelope body (without the wire version) for this relay.
+    Relay(SocketAddr, Vec<u8>),
+}
 
 /// overlay settings.
 #[derive(Debug, Clone)]
@@ -42,6 +51,14 @@ pub struct OverlayConfig {
     pub peers: Arc<PeerSet>,
     /// topology control plane settings. `None` keeps the m4 static behaviour.
     pub control: Option<RouterConfig>,
+    /// this node's logical identity. `Some` enables endpoint migration and relay
+    /// fallback (m6); `None` keeps the m5 static-endpoint behaviour.
+    pub identity: Option<NodeId>,
+    /// the live link table published by the control plane. `None` means send
+    /// straight to the routing table's next hop.
+    pub links: Option<LinkSnapshot>,
+    /// whether this node forwards relay envelopes for other peers.
+    pub serve_relay: bool,
 }
 
 /// run until shutdown or a task fails.
@@ -61,12 +78,21 @@ where
 {
     let socket = Arc::new(socket);
 
-    // bounded queues: outbound carries (next hop, packet), inbound carries packets for the tun.
+    // the link table is always present internally; when the caller did not
+    // provide one, it stays empty and the data plane falls back to the routing
+    // table's next hop.
+    let mut config = config;
+    let links = config.links.clone().unwrap_or_default();
+    config.links = Some(links.clone());
+
+    // bounded queues: outbound carries datagrams to send, inbound carries
+    // packets for the tun.
     let (outbound_tx, outbound_rx) = mpsc::channel::<Outbound>(config.queue_depth);
     let (inbound_tx, inbound_rx) = mpsc::channel::<Vec<u8>>(config.queue_depth);
-    // control messages decoded from the wire, tagged with their udp source.
-    let (control_tx, control_rx) =
-        mpsc::channel::<(SocketAddr, control::Message)>(config.queue_depth);
+    // raw control-plane datagrams decoded from the wire, tagged with their udp
+    // source. decryption happens in the router, so the session keys never reach
+    // the data plane.
+    let (control_tx, control_rx) = mpsc::channel::<(SocketAddr, Inbound)>(config.queue_depth);
 
     // internal stop signal, so any finishing task can stop the others.
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -90,7 +116,12 @@ where
     // config we drain the receiver so sends from the receive task are harmless.
     let control_sender = match control_config {
         Some(router_config) => {
-            let router = Router::new(router_config, config.peers.clone(), config.routes.clone());
+            let router = Router::new(
+                router_config,
+                config.peers.clone(),
+                config.routes.clone(),
+                links,
+            );
             tasks.spawn(router::run(
                 router,
                 socket.clone(),
@@ -181,8 +212,12 @@ async fn tun_to_outbound<R: PacketReader>(
                 }
                 let routes = config.routes.current();
                 match forward::decide(packet, &config.local, &routes, &config.peers, None) {
-                    Decision::Forward { next_hop } => {
-                        if outbound.send((next_hop, packet.to_vec())).await.is_err() {
+                    Decision::Forward {
+                        next_hop,
+                        next_hop_id,
+                    } => {
+                        let out = wrap(packet.to_vec(), next_hop, next_hop_id, &config);
+                        if outbound.send(out).await.is_err() {
                             return Ok(());
                         }
                     }
@@ -211,24 +246,37 @@ async fn outbound_to_udp(
                 return Ok(());
             }
             item = outbound.recv() => {
-                let Some((next_hop, packet)) = item else {
+                let Some(item) = item else {
                     return Ok(());
                 };
-                if let Err(err) = transport::send_message(&socket, next_hop, &packet).await {
-                    warn!(%next_hop, error = %err, "failed to send datagram");
+                let result = match item {
+                    Outbound::Data(addr, packet) => {
+                        transport::send_message(&socket, addr, &packet).await
+                    }
+                    Outbound::Relay(addr, body) => {
+                        transport::send_relay(&socket, addr, &body).await
+                    }
+                };
+                if let Err(err) = result {
+                    warn!(error = %err, "failed to send datagram");
                 }
             }
         }
     }
 }
 
-// udp -> inbound queue (deliver) or outbound queue (forward). only known peers are accepted.
+// udp -> inbound queue (deliver) or outbound queue (forward).
+//
+// packet frames are only accepted from known endpoints. control frames are
+// passed to the router, which authenticates them - they may legitimately arrive
+// from a peer's new, not-yet-known endpoint, which is exactly how migration is
+// signalled. relay frames are only accepted from known peers.
 async fn udp_to_outbound(
     socket: Arc<UdpSocket>,
     inbound: mpsc::Sender<Vec<u8>>,
     outbound: mpsc::Sender<Outbound>,
     config: OverlayConfig,
-    control: Option<mpsc::Sender<(SocketAddr, control::Message)>>,
+    control: Option<mpsc::Sender<(SocketAddr, Inbound)>>,
     mut stop: watch::Receiver<bool>,
 ) -> io::Result<()> {
     let mut buf = vec![0u8; MAX_DATAGRAM_SIZE + 1];
@@ -246,45 +294,33 @@ async fn udp_to_outbound(
                         return Err(err);
                     }
                 };
-                if !config.peers.is_known(from) {
-                    warn!(%from, "ignored datagram from unknown address");
-                    continue;
-                }
-                let packet = match wire::decode_frame(&buf[..len]) {
-                    Ok(wire::Frame::Packet(payload)) => payload,
+                match wire::decode_frame(&buf[..len]) {
                     Ok(wire::Frame::Control(body)) => {
-                        deliver_control(&control, from, body).await;
-                        continue;
+                        deliver_control(&control, from, Inbound::Control(body.to_vec())).await;
+                    }
+                    Ok(wire::Frame::Handshake(body)) => {
+                        deliver_control(&control, from, Inbound::Handshake(body.to_vec())).await;
+                    }
+                    Ok(wire::Frame::Relay(body)) => {
+                        if !config.peers.is_known(from) {
+                            warn!(%from, "ignored relay frame from unknown address");
+                            continue;
+                        }
+                        handle_relay(body, from, &config, &inbound, &outbound).await?;
+                    }
+                    Ok(wire::Frame::Packet(payload)) => {
+                        if !config.peers.is_known(from) {
+                            warn!(%from, "ignored datagram from unknown address");
+                            continue;
+                        }
+                        if let Err(err) = packet::validate(payload) {
+                            warn!(%from, error = %err, "dropped invalid ip packet");
+                            continue;
+                        }
+                        receive_packet(payload, from, &config, &inbound, &outbound).await?;
                     }
                     Err(err) => {
                         warn!(%from, error = %err, "dropped malformed datagram");
-                        continue;
-                    }
-                };
-                if let Err(err) = packet::validate(packet) {
-                    warn!(%from, error = %err, "dropped invalid ip packet");
-                    continue;
-                }
-                let routes = config.routes.current();
-                match forward::decide(packet, &config.local, &routes, &config.peers, Some(from)) {
-                    Decision::Deliver => {
-                        if inbound.send(packet.to_vec()).await.is_err() {
-                            return Ok(());
-                        }
-                    }
-                    Decision::Forward { next_hop } => {
-                        let mut forwarded = packet.to_vec();
-                        if !packet::decrement_hop_limit(&mut forwarded) {
-                            warn!(%from, reason = DropReason::HopLimitExpired.as_str(), "dropped forwarded packet");
-                            continue;
-                        }
-                        // a full queue drops the packet: forwarding must not block receives.
-                        if let Err(err) = outbound.try_send((next_hop, forwarded)) {
-                            warn!(%from, %next_hop, error = %err, "forward queue full; dropped packet");
-                        }
-                    }
-                    Decision::Drop(reason) => {
-                        warn!(%from, reason = reason.as_str(), "dropped received packet");
                     }
                 }
             }
@@ -292,23 +328,145 @@ async fn udp_to_outbound(
     }
 }
 
-// decode a control frame and hand it to the router, if one is running.
-async fn deliver_control(
-    control: &Option<mpsc::Sender<(SocketAddr, control::Message)>>,
+// deliver a validated received packet locally or forward it toward its next hop.
+async fn receive_packet(
+    packet: &[u8],
     from: SocketAddr,
+    config: &OverlayConfig,
+    inbound: &mpsc::Sender<Vec<u8>>,
+    outbound: &mpsc::Sender<Outbound>,
+) -> io::Result<()> {
+    let routes = config.routes.current();
+    match forward::decide(packet, &config.local, &routes, &config.peers, Some(from)) {
+        Decision::Deliver => {
+            inbound
+                .send(packet.to_vec())
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "tun writer closed"))?;
+        }
+        Decision::Forward {
+            next_hop,
+            next_hop_id,
+        } => {
+            let mut forwarded = packet.to_vec();
+            if !packet::decrement_hop_limit(&mut forwarded) {
+                warn!(%from, reason = DropReason::HopLimitExpired.as_str(), "dropped forwarded packet");
+                return Ok(());
+            }
+            let out = wrap(forwarded, next_hop, next_hop_id, config);
+            // a full queue drops the packet: forwarding must not block receives.
+            if let Err(err) = outbound.try_send(out) {
+                warn!(%from, %next_hop, error = %err, "forward queue full; dropped packet");
+            }
+        }
+        Decision::Drop(reason) => {
+            warn!(%from, reason = reason.as_str(), "dropped received packet");
+        }
+    }
+    Ok(())
+}
+
+// handle a relay envelope: deliver it if we are the destination, otherwise
+// forward it toward the destination if we are serving as a relay.
+async fn handle_relay(
     body: &[u8],
+    from: SocketAddr,
+    config: &OverlayConfig,
+    inbound: &mpsc::Sender<Vec<u8>>,
+    outbound: &mpsc::Sender<Outbound>,
+) -> io::Result<()> {
+    let Some(local) = config.identity else {
+        debug!(%from, "ignored relay envelope (endpoint migration disabled)");
+        return Ok(());
+    };
+    let envelope = match relay::decode(body) {
+        Ok(envelope) => envelope,
+        Err(err) => {
+            warn!(%from, error = %err, "dropped malformed relay envelope");
+            return Ok(());
+        }
+    };
+    // an envelope addressed to us is delivered even when we are not a relay;
+    // forwarding for others additionally requires the relay role, a known
+    // client, and that the envelope does not claim to come from a peer we track
+    // at a *different* endpoint. without that last check a known peer could wrap
+    // traffic pretending to originate from another peer we can reach directly.
+    // a source we do not track at all is allowed: it is not impersonating one.
+    let src_bound = match config
+        .links
+        .as_ref()
+        .and_then(|links| links.get(envelope.src))
+    {
+        Some(Link::Direct(addr)) => addr == from,
+        Some(Link::Relay(_)) => false,
+        None => true,
+    };
+    let allowed = config.serve_relay && config.peers.is_known(from) && src_bound;
+    let dst_endpoint = config
+        .links
+        .as_ref()
+        .and_then(|links| match links.get(envelope.dst) {
+            Some(Link::Direct(addr)) => Some(addr),
+            _ => None,
+        });
+    match relay::decide(&envelope, local, allowed, dst_endpoint) {
+        relay::Action::Deliver(inner) => {
+            if let Err(err) = packet::validate(&inner) {
+                warn!(%from, error = %err, "dropped invalid relayed packet");
+                return Ok(());
+            }
+            // the peer the envelope was addressed to is us; the inner packet
+            // still goes through the normal receive path (it may be for us or
+            // for a further hop).
+            receive_packet(&inner, from, config, inbound, outbound).await
+        }
+        relay::Action::Forward { to, body } => {
+            if let Err(err) = outbound.try_send(Outbound::Relay(to, body)) {
+                warn!(%from, %to, error = %err, "relay queue full; dropped envelope");
+            }
+            Ok(())
+        }
+        relay::Action::Drop(reason) => {
+            warn!(%from, reason = reason.as_str(), "dropped relay envelope");
+            Ok(())
+        }
+    }
+}
+
+// decide how to send a packet for a next hop: straight to its current endpoint,
+// or wrapped in a relay envelope when the path is relayed.
+fn wrap(
+    packet: Vec<u8>,
+    next_hop: SocketAddr,
+    next_hop_id: Option<NodeId>,
+    config: &OverlayConfig,
+) -> Outbound {
+    if let (Some(id), Some(local), Some(links)) = (next_hop_id, config.identity, &config.links) {
+        match links.get(id) {
+            Some(Link::Direct(addr)) => return Outbound::Data(addr, packet),
+            Some(Link::Relay(relay_addr)) => {
+                if let Ok(body) = relay::encode(local, id, relay::MAX_RELAY_TTL, &packet) {
+                    return Outbound::Relay(relay_addr, body);
+                }
+            }
+            None => {}
+        }
+    }
+    Outbound::Data(next_hop, packet)
+}
+
+// hand a raw control body to the router, if one is running.
+async fn deliver_control(
+    control: &Option<mpsc::Sender<(SocketAddr, Inbound)>>,
+    from: SocketAddr,
+    inbound: Inbound,
 ) {
     let Some(sender) = control else {
         debug!(%from, "ignored control message (topology disabled)");
         return;
     };
-    match control::decode(body) {
-        Ok(message) => {
-            if sender.send((from, message)).await.is_err() {
-                debug!(%from, "control plane is not accepting messages");
-            }
-        }
-        Err(err) => warn!(%from, error = %err, "dropped malformed control message"),
+    if sender.send((from, inbound)).await.is_err() {
+        debug!(%from, "control plane is not accepting messages");
     }
 }
 
@@ -429,6 +587,9 @@ mod tests {
             routes: RouteSnapshot::new(RoutingTable::new(routes)),
             peers: Arc::new(PeerSet::new(peers)),
             control: None,
+            identity: None,
+            links: None,
+            serve_relay: false,
         }
     }
 

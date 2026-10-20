@@ -9,6 +9,10 @@
 //! - `VERSION` (1): the body is a raw ip packet, ready to forward.
 //! - `CONTROL_VERSION` (2): the body is a topology control message, handled by
 //!   the control plane (`control.rs`) instead of being forwarded.
+//! - `RELAY_VERSION` (3): the body is a relay envelope (`relay.rs`) whose inner
+//!   packet is forwarded on behalf of a peer that cannot be reached directly.
+//! - `HANDSHAKE_VERSION` (4): the body is a Noise handshake message (`noise.rs`)
+//!   exchanged with a peer before any control message can be authenticated.
 
 use std::error::Error;
 use std::fmt;
@@ -19,6 +23,12 @@ pub const VERSION: u8 = 1;
 /// version byte for control-plane frames. the body is a `control::Message`.
 pub const CONTROL_VERSION: u8 = 2;
 
+/// version byte for relay frames. the body is a `relay::Envelope`.
+pub const RELAY_VERSION: u8 = 3;
+
+/// version byte for Noise handshake frames. the body is a handshake message.
+pub const HANDSHAKE_VERSION: u8 = 4;
+
 /// a parsed frame, tagged by what the body means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Frame<'a> {
@@ -26,6 +36,10 @@ pub enum Frame<'a> {
     Packet(&'a [u8]),
     /// a topology control message.
     Control(&'a [u8]),
+    /// a relay envelope carrying a packet for a peer.
+    Relay(&'a [u8]),
+    /// a Noise handshake message.
+    Handshake(&'a [u8]),
 }
 
 /// version + 2 byte length
@@ -46,6 +60,16 @@ pub fn encode(payload: &[u8]) -> Result<Vec<u8>, WireError> {
 /// pack a topology control message into a control frame.
 pub fn encode_control(payload: &[u8]) -> Result<Vec<u8>, WireError> {
     encode_versioned(CONTROL_VERSION, payload)
+}
+
+/// pack a relay envelope into a relay frame.
+pub fn encode_relay(payload: &[u8]) -> Result<Vec<u8>, WireError> {
+    encode_versioned(RELAY_VERSION, payload)
+}
+
+/// pack a noise handshake message into a handshake frame.
+pub fn encode_handshake(payload: &[u8]) -> Result<Vec<u8>, WireError> {
+    encode_versioned(HANDSHAKE_VERSION, payload)
 }
 
 fn encode_versioned(version: u8, payload: &[u8]) -> Result<Vec<u8>, WireError> {
@@ -81,6 +105,8 @@ pub fn decode_frame(datagram: &[u8]) -> Result<Frame<'_>, WireError> {
     match version {
         VERSION => Ok(Frame::Packet(body)),
         CONTROL_VERSION => Ok(Frame::Control(body)),
+        RELAY_VERSION => Ok(Frame::Relay(body)),
+        HANDSHAKE_VERSION => Ok(Frame::Handshake(body)),
         other => Err(WireError::UnsupportedVersion(other)),
     }
 }
@@ -257,6 +283,19 @@ mod tests {
         assert_eq!(
             decode(&bytes),
             Err(WireError::UnsupportedVersion(CONTROL_VERSION))
+        );
+    }
+
+    #[test]
+    fn relay_frames_round_trip() {
+        let body = b"relay body";
+        let bytes = encode_relay(body).expect("encode");
+        assert_eq!(bytes[0], RELAY_VERSION);
+        assert_eq!(decode_frame(&bytes).expect("decode"), Frame::Relay(body));
+        // the packet-only decoder refuses a relay frame.
+        assert_eq!(
+            decode(&bytes),
+            Err(WireError::UnsupportedVersion(RELAY_VERSION))
         );
     }
 

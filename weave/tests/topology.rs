@@ -23,12 +23,13 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Instant};
 
+use weave::connectivity::LinkSnapshot;
 use weave::control::Message;
 use weave::overlay::{self, OverlayConfig};
 use weave::peer::PeerSet;
 use weave::route::{RouteSnapshot, RoutingTable};
 use weave::router::{Neighbor, Router, RouterConfig};
-use weave::topology::NodeId;
+use weave::topology::{LinkAdvert, LinkState, NodeId};
 use weave::tun::{PacketReader, PacketWriter};
 
 fn ip(s: &str) -> Ipv4Addr {
@@ -60,7 +61,12 @@ fn build_router(id: &str, port: u16, spec: &[(&str, u16)]) -> Router {
     let peers = Arc::new(PeerSet::new(neighbors.iter().map(|n| n.addr)));
     let mut config = RouterConfig::new(node(id), addr(port), neighbors);
     config.link_timeout = Duration::from_millis(500);
-    Router::new(config, peers, RouteSnapshot::new(RoutingTable::default()))
+    Router::new(
+        config,
+        peers,
+        RouteSnapshot::new(RoutingTable::default()),
+        LinkSnapshot::new(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -78,9 +84,28 @@ struct Sim {
     nodes: Vec<SimNode>,
     by_addr: HashMap<SocketAddr, usize>,
     floods: usize,
+    // deterministic fault injection: a fixed-seed prng drops a percentage of
+    // messages and holds another percentage for `delay`, so loss and reordering
+    // are reproducible without any sleeping or real clock.
+    seed: u64,
+    loss_percent: u32,
+    delay: Duration,
+    held: Vec<(StdInstant, SocketAddr, SocketAddr, Message)>,
 }
 
 impl Sim {
+    fn from_nodes(nodes: Vec<SimNode>, by_addr: HashMap<SocketAddr, usize>) -> Self {
+        Self {
+            nodes,
+            by_addr,
+            floods: 0,
+            seed: 0x9e37_79b9_7f4a_7c15,
+            loss_percent: 0,
+            delay: Duration::ZERO,
+            held: Vec::new(),
+        }
+    }
+
     /// the standard four-node two-path topology:
     /// a-b-d and a-c-d, plus the reverse links.
     fn two_paths() -> Self {
@@ -102,10 +127,31 @@ impl Sim {
                 active: true,
             });
         }
-        Self {
-            nodes,
-            by_addr,
-            floods: 0,
+        Self::from_nodes(nodes, by_addr)
+    }
+
+    fn set_impairment(&mut self, loss_percent: u32, delay: Duration) {
+        self.loss_percent = loss_percent;
+        self.delay = delay;
+    }
+
+    fn rng(&mut self) -> u64 {
+        self.seed = self
+            .seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.seed
+    }
+
+    /// rebuild a node's router from scratch, simulating a restart where every
+    /// other node still holds the old version's state.
+    fn restart(&mut self, id: &str, port: u16, spec: &[(&str, u16)]) {
+        let id = node(id);
+        for node in &mut self.nodes {
+            if node.id == id {
+                node.router = build_router(&node.id.0.to_string(), port, spec);
+                node.active = true;
+            }
         }
     }
 
@@ -128,8 +174,24 @@ impl Sim {
         self.deliver(queue, now);
     }
 
+    /// deliver anything the delay buffer is holding that is now due.
+    fn flush_due(&mut self, now: StdInstant) {
+        let mut due = Vec::new();
+        let mut still_held = Vec::new();
+        for (at, from, to, message) in self.held.drain(..) {
+            if at <= now {
+                due.push((from, to, message));
+            } else {
+                still_held.push((at, from, to, message));
+            }
+        }
+        self.held = still_held;
+        self.process(due, now);
+    }
+
     /// one heartbeat interval across every active node, then flood everything.
     fn round(&mut self, now: StdInstant) {
+        self.flush_due(now);
         let mut queue = Vec::new();
         for node in self.nodes.iter_mut().filter(|n| n.active) {
             for (to, message) in node.router.tick(now) {
@@ -139,7 +201,22 @@ impl Sim {
         self.deliver(queue, now);
     }
 
-    fn deliver(&mut self, mut queue: Vec<(SocketAddr, SocketAddr, Message)>, now: StdInstant) {
+    fn deliver(&mut self, queue: Vec<(SocketAddr, SocketAddr, Message)>, now: StdInstant) {
+        let mut process = Vec::new();
+        for (from, to, message) in queue {
+            if (self.rng() % 100) < u64::from(self.loss_percent) {
+                continue;
+            }
+            if self.delay > Duration::ZERO && (self.rng() % 2) == 0 {
+                self.held.push((now + self.delay, from, to, message));
+                continue;
+            }
+            process.push((from, to, message));
+        }
+        self.process(process, now);
+    }
+
+    fn process(&mut self, mut queue: Vec<(SocketAddr, SocketAddr, Message)>, now: StdInstant) {
         // a hard budget turns any accidental flood loop into a test failure
         // instead of a hang.
         let mut budget = 100_000;
@@ -242,11 +319,7 @@ fn a_failed_link_with_no_alternate_leaves_the_destination_unreachable() {
             active: true,
         });
     }
-    let mut sim = Sim {
-        nodes,
-        by_addr,
-        floods: 0,
-    };
+    let mut sim = Sim::from_nodes(nodes, by_addr);
     sim.start(t0);
     sim.converge(t0, 2);
     assert_eq!(sim.route_to("10.0.0.1", "10.0.0.4"), Some(addr(4202)));
@@ -257,6 +330,202 @@ fn a_failed_link_with_no_alternate_leaves_the_destination_unreachable() {
         sim.route_to("10.0.0.1", "10.0.0.4"),
         None,
         "with no alternate path d is unreachable, not silently misrouted"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// fault injection (deterministic)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn topology_converges_despite_packet_loss_and_reordering() {
+    let t0 = StdInstant::now();
+    let mut sim = Sim::two_paths();
+    sim.set_impairment(30, Duration::from_millis(120));
+    sim.start(t0);
+
+    let mut converged = false;
+    for i in 0..40u32 {
+        sim.round(t0 + Duration::from_millis(u64::from(i) * 100));
+        if sim.route_to("10.0.0.1", "10.0.0.4").is_some()
+            && sim.route_to("10.0.0.4", "10.0.0.1").is_some()
+        {
+            converged = true;
+            break;
+        }
+    }
+    assert!(
+        converged,
+        "topology never converged under loss and reordering"
+    );
+}
+
+#[test]
+fn a_restarted_node_reconverges_with_peers_holding_stale_state() {
+    let t0 = StdInstant::now();
+    let mut sim = Sim::two_paths();
+    sim.start(t0);
+    sim.converge(t0, 2);
+    assert_eq!(sim.route_to("10.0.0.1", "10.0.0.4"), Some(addr(4102)));
+
+    // b is lost and a fails over to c.
+    sim.set_active("10.0.0.2", false);
+    let t1 = t0 + Duration::from_millis(600);
+    sim.converge(t1, 2);
+    assert_eq!(sim.route_to("10.0.0.1", "10.0.0.4"), Some(addr(4103)));
+
+    // b returns as a fresh instance while a, c and d still hold its old state.
+    sim.restart("10.0.0.2", 4102, &[("10.0.0.1", 4101), ("10.0.0.4", 4104)]);
+    sim.converge(t1 + Duration::from_millis(100), 3);
+    assert_eq!(
+        sim.route_to("10.0.0.1", "10.0.0.4"),
+        Some(addr(4102)),
+        "the restarted node's state must be accepted by peers holding stale data"
+    );
+}
+
+#[test]
+fn sustained_loss_does_not_falsely_detect_a_failure() {
+    let t0 = StdInstant::now();
+    let mut sim = Sim::two_paths();
+    sim.start(t0);
+    sim.converge(t0, 2);
+    assert_eq!(sim.route_to("10.0.0.1", "10.0.0.4"), Some(addr(4102)));
+
+    // every node is alive; heartbeats still get through often enough that the
+    // preferred path through b must not be torn down.
+    sim.set_impairment(20, Duration::ZERO);
+    for i in 1..=5u32 {
+        sim.round(t0 + Duration::from_millis(u64::from(i) * 100));
+    }
+    assert_eq!(
+        sim.route_to("10.0.0.1", "10.0.0.4"),
+        Some(addr(4102)),
+        "moderate loss must not be mistaken for a failure"
+    );
+}
+
+#[test]
+fn a_delayed_advert_cannot_resurrect_a_failed_link() {
+    let t0 = StdInstant::now();
+    let mut sim = Sim::two_paths();
+    sim.start(t0);
+    sim.converge(t0, 2);
+
+    sim.set_active("10.0.0.2", false);
+    let t1 = t0 + Duration::from_millis(600);
+    sim.converge(t1, 2);
+    assert_eq!(sim.route_to("10.0.0.1", "10.0.0.2"), None);
+
+    // a very old advert from b (sequence 0), claiming b -> a is up, arrives at a
+    // after recovery. it must be rejected as stale.
+    let stale = LinkAdvert {
+        origin: node("10.0.0.2"),
+        origin_addr: addr(4102),
+        seq: 0,
+        from: node("10.0.0.2"),
+        to: node("10.0.0.1"),
+        metric: 1,
+        state: LinkState::Up,
+        ttl: 0,
+    };
+    let out = sim.nodes[0]
+        .router
+        .handle(addr(4102), Message::LinkAdvert(stale), t1);
+    assert!(out.is_empty(), "a stale advert must not be flooded");
+    assert_eq!(
+        sim.route_to("10.0.0.1", "10.0.0.2"),
+        None,
+        "a delayed advert must not resurrect a failed link"
+    );
+}
+
+#[test]
+fn recovery_detection_and_convergence_are_measured() {
+    let t0 = StdInstant::now();
+    let mut sim = Sim::two_paths();
+    let link_timeout = Duration::from_millis(500);
+    let step = Duration::from_millis(100);
+    sim.start(t0);
+    sim.converge(t0, 2);
+    assert_eq!(sim.route_to("10.0.0.1", "10.0.0.4"), Some(addr(4102)));
+
+    // failure injected at t_fail. time is advanced in heartbeat-sized steps and
+    // we record when a's chosen next hop actually changes (detection) and when
+    // the new path is usable in both directions (convergence).
+    let t_fail = t0 + Duration::from_millis(200);
+    sim.set_active("10.0.0.2", false);
+    let floods_before = sim.floods;
+
+    let mut detection = None;
+    let mut convergence = None;
+    for i in 1..=15u32 {
+        let now = t_fail + step * i;
+        sim.round(now);
+        let hop = sim.route_to("10.0.0.1", "10.0.0.4");
+        if detection.is_none() && hop == Some(addr(4103)) {
+            detection = Some(now - t_fail);
+        }
+        if hop == Some(addr(4103)) && sim.route_to("10.0.0.4", "10.0.0.1") == Some(addr(4103)) {
+            convergence = Some(now - t_fail);
+            break;
+        }
+    }
+
+    let detection = detection.expect("failure was never detected");
+    let convergence = convergence.expect("route never converged");
+    let floods = sim.floods - floods_before;
+    println!(
+        "recovery: detection={}ms convergence={}ms floods={floods} (link_timeout={}ms, step={}ms)",
+        detection.as_millis(),
+        convergence.as_millis(),
+        link_timeout.as_millis(),
+        step.as_millis(),
+    );
+    assert!(
+        detection <= link_timeout + step,
+        "detection ({detection:?}) exceeded link_timeout + step"
+    );
+    assert!(
+        convergence >= detection,
+        "convergence reported before detection"
+    );
+}
+
+#[test]
+fn a_temporary_partition_heals_after_it_ends() {
+    let t0 = StdInstant::now();
+    let mut sim = Sim::two_paths();
+    sim.start(t0);
+    sim.converge(t0, 2);
+    assert_eq!(sim.route_to("10.0.0.1", "10.0.0.4"), Some(addr(4102)));
+
+    // total loss: the fabric is cut for longer than the link timeout, so every
+    // route ages out.
+    sim.set_impairment(100, Duration::ZERO);
+    for i in 1..=8u32 {
+        sim.round(t0 + Duration::from_millis(u64::from(i) * 100));
+    }
+    assert_eq!(
+        sim.route_to("10.0.0.1", "10.0.0.4"),
+        None,
+        "a partitioned link stayed usable"
+    );
+
+    // the partition heals; heartbeats get through again and the topology must
+    // reconverge on its own.
+    sim.set_impairment(0, Duration::ZERO);
+    let mut recovered = false;
+    for i in 9..=40u32 {
+        sim.round(t0 + Duration::from_millis(u64::from(i) * 100));
+        if sim.route_to("10.0.0.1", "10.0.0.4").is_some() {
+            recovered = true;
+            break;
+        }
+    }
+    assert!(
+        recovered,
+        "the topology did not heal after the partition ended"
     );
 }
 
@@ -356,6 +625,9 @@ fn spawn_node(
         routes: routes.clone(),
         peers,
         control: Some(config),
+        identity: Some(NodeId(ip(local))),
+        links: Some(LinkSnapshot::new()),
+        serve_relay: false,
     };
     let (stop, stop_rx) = watch::channel(false);
     let handle = tokio::spawn(overlay::run(

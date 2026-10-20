@@ -10,7 +10,10 @@ use tokio::sync::watch;
 use tokio::task::JoinError;
 use tracing::{info, warn};
 
+use weave::connectivity::LinkSnapshot;
+use weave::noise::{Identity, PublicKey};
 use weave::peer::PeerSet;
+use weave::rate::RateLimitConfig;
 use weave::route::{Route, RouteSnapshot, RouteSpec, RoutingTable};
 use weave::router::{Neighbor, RouterConfig};
 use weave::topology::NodeId;
@@ -22,7 +25,8 @@ use weave::{overlay, transport, tun, wire};
 /// `--tun`, overlay addresses and `--route`s they move ip packets, hopping
 /// through intermediate peers as needed. with `--neighbor`, peers exchange
 /// link state, calculate routes, and fail over to an alternate path when a
-/// link dies. no crypto or discovery.
+/// link dies. with `--identity`/`--peer-key`, control messages are
+/// authenticated and encrypted with noise ik. no discovery.
 #[derive(Debug, Parser)]
 #[command(name = "weave", version, about, long_about)]
 struct Args {
@@ -67,6 +71,31 @@ struct Args {
     #[arg(long, value_name = "MS", requires = "tun")]
     link_timeout_ms: Option<u64>,
 
+    /// this node's long-term private key as hex. enables authenticated,
+    /// encrypted control sessions (needs x25519-dalek with static_secrets).
+    #[arg(long, value_name = "HEX", requires = "tun")]
+    identity: Option<String>,
+
+    /// a neighbour's static public key as hex, repeatable: `<IP>=<HEX>`.
+    /// required for every neighbour when --identity is set.
+    #[arg(long = "peer-key", value_name = "IP=HEX", requires = "tun")]
+    peer_keys: Vec<PeerKeySpec>,
+
+    /// relay endpoint to fall back to when a neighbour cannot be reached
+    /// directly, e.g. 127.0.0.1:4900.
+    #[arg(long, value_name = "ADDR:PORT", requires = "tun")]
+    relay: Option<SocketAddr>,
+
+    /// forward relay envelopes on behalf of neighbours (run this node as a
+    /// relay).
+    #[arg(long, requires = "tun")]
+    serve_relay: bool,
+
+    /// control messages accepted per second from a single source before it is
+    /// throttled; 0 disables rate limiting (with --tun)
+    #[arg(long, value_name = "N", requires = "tun", default_value_t = 32)]
+    control_rate_limit: u32,
+
     /// overlay mtu (default 1420)
     #[arg(long, value_name = "N", requires = "tun")]
     mtu: Option<u16>,
@@ -101,9 +130,32 @@ impl FromStr for NeighborSpec {
     }
 }
 
+/// a neighbour's static public key: `<overlay-ip>=<hex-public-key>`.
+#[derive(Debug, Clone)]
+struct PeerKeySpec {
+    id: NodeId,
+    key: PublicKey,
+}
+
+impl FromStr for PeerKeySpec {
+    type Err = io::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (ip, key) = s
+            .split_once('=')
+            .ok_or_else(|| missing(&format!("invalid peer-key spec: {s}")))?;
+        let id = ip
+            .parse::<Ipv4Addr>()
+            .map(NodeId)
+            .map_err(|_| missing(&format!("invalid peer-key overlay address: {ip}")))?;
+        let key = PublicKey::from_hex(key)
+            .map_err(|err| missing(&format!("invalid peer-key hex for {ip}: {err}")))?;
+        Ok(Self { id, key })
+    }
+}
+
 /// default overlay mtu.
 const DEFAULT_MTU: u16 = 1420;
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
@@ -235,11 +287,40 @@ async fn run_overlay(args: Args) -> Result<(), Box<dyn Error>> {
     let local_addr = socket.local_addr()?;
     info!(bind = %args.bind, %address, "weave overlay listening");
 
+    let identity = NodeId(address);
+    let local_key = match args.identity.as_deref() {
+        Some(hex) => Some(Identity::from_hex(hex)?),
+        None => None,
+    };
+    let peer_keys: std::collections::HashMap<NodeId, PublicKey> = args
+        .peer_keys
+        .iter()
+        .map(|spec| (spec.id, spec.key))
+        .collect();
+    if local_key.is_some() && peer_keys.len() != neighbors.len() {
+        warn!(
+            peers = peer_keys.len(),
+            neighbors = neighbors.len(),
+            "every neighbour needs a --peer-key when --identity is set; unkeyed neighbours cannot talk"
+        );
+    }
+    if args.relay.is_some() && local_key.is_none() {
+        warn!("--relay without --identity: endpoint migration stays disabled, only configured endpoints are accepted");
+    }
+
     let control = if neighbors.is_empty() {
         None
     } else {
-        let mut config = RouterConfig::new(NodeId(address), local_addr, neighbors);
+        let mut config = RouterConfig::new(identity, local_addr, neighbors);
         config.base_routes = routes.clone();
+        config.identity = local_key;
+        config.peer_keys = peer_keys;
+        config.relay = args.relay;
+        config.serve_relay = args.serve_relay;
+        config.rate_limit = RateLimitConfig::with_rate(
+            args.control_rate_limit,
+            args.control_rate_limit.saturating_mul(32),
+        );
         if let Some(ms) = args.heartbeat_ms {
             config.heartbeat = Duration::from_millis(ms.max(1));
         }
@@ -249,10 +330,18 @@ async fn run_overlay(args: Args) -> Result<(), Box<dyn Error>> {
         info!(
             heartbeat_ms = config.heartbeat.as_millis() as u64,
             link_timeout_ms = config.link_timeout.as_millis() as u64,
+            authenticated = config.identity.is_some(),
+            relay = config
+                .relay
+                .map(|addr| addr.to_string())
+                .unwrap_or_default(),
             "topology routing enabled"
         );
         Some(config)
     };
+
+    let m6 = control.is_some();
+    let links = LinkSnapshot::new();
 
     let overlay_config = overlay::OverlayConfig {
         local: vec![address],
@@ -261,6 +350,9 @@ async fn run_overlay(args: Args) -> Result<(), Box<dyn Error>> {
         routes: RouteSnapshot::new(RoutingTable::new(routes)),
         peers: Arc::new(PeerSet::new(peer_addrs)),
         control,
+        identity: m6.then_some(identity),
+        links: m6.then_some(links),
+        serve_relay: args.serve_relay,
     };
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

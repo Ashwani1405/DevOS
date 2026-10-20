@@ -30,6 +30,26 @@ pub async fn send_control(socket: &UdpSocket, dest: SocketAddr, payload: &[u8]) 
     Ok(())
 }
 
+/// encode a relay envelope body and send it to dest.
+pub async fn send_relay(socket: &UdpSocket, dest: SocketAddr, payload: &[u8]) -> io::Result<()> {
+    let bytes = wire::encode_relay(payload)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    socket.send_to(&bytes, dest).await?;
+    Ok(())
+}
+
+/// encode a noise handshake message and send it to dest.
+pub async fn send_handshake(
+    socket: &UdpSocket,
+    dest: SocketAddr,
+    payload: &[u8],
+) -> io::Result<()> {
+    let bytes = wire::encode_handshake(payload)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    socket.send_to(&bytes, dest).await?;
+    Ok(())
+}
+
 /// read one raw datagram, returns its length and who sent it. size buf to
 /// MAX_DATAGRAM_SIZE + 1 so an oversized datagram reads back truncated.
 pub async fn recv_datagram(socket: &UdpSocket, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {

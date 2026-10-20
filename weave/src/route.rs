@@ -13,6 +13,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
+use crate::topology::NodeId;
+
 /// an ipv4 prefix, e.g. `10.0.0.0/24` or a single host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ipv4Prefix {
@@ -106,6 +108,13 @@ pub struct Route {
     pub dest: Ipv4Prefix,
     /// udp endpoint of the peer that is the next hop.
     pub next_hop: SocketAddr,
+    /// the next hop's logical identity, when it is known.
+    ///
+    /// dynamic routes always carry it; static routes configured by hand do not.
+    /// when it is present, the data plane resolves the live endpoint (and any
+    /// relay fallback) from it, so a route survives its next hop changing
+    /// physical address. see `connectivity.rs`.
+    pub next_hop_id: Option<NodeId>,
     /// cost of the route; lower wins on a tie.
     pub metric: u32,
     /// how the route got here.
@@ -118,16 +127,18 @@ impl Route {
         Self {
             dest: Ipv4Prefix::host(addr),
             next_hop,
+            next_hop_id: None,
             metric: 1,
             source: RouteSource::Static,
         }
     }
 
     /// a host route learned from the topology, with its path cost as metric.
-    pub fn dynamic(addr: Ipv4Addr, next_hop: SocketAddr, metric: u32) -> Self {
+    pub fn dynamic(addr: Ipv4Addr, next_hop_id: NodeId, next_hop: SocketAddr, metric: u32) -> Self {
         Self {
             dest: Ipv4Prefix::host(addr),
             next_hop,
+            next_hop_id: Some(next_hop_id),
             metric,
             source: RouteSource::Dynamic,
         }
@@ -149,6 +160,7 @@ impl RouteSpec {
         Route {
             dest: self.dest,
             next_hop: self.next_hop,
+            next_hop_id: None,
             metric: 1,
             source: RouteSource::Static,
         }
@@ -331,12 +343,14 @@ mod tests {
             Route {
                 dest: "0.0.0.0/0".parse().unwrap(),
                 next_hop: hop(1),
+                next_hop_id: None,
                 metric: 1,
                 source: RouteSource::Static,
             },
             Route {
                 dest: "10.0.0.0/24".parse().unwrap(),
                 next_hop: hop(2),
+                next_hop_id: None,
                 metric: 1,
                 source: RouteSource::Static,
             },
@@ -352,12 +366,14 @@ mod tests {
             Route {
                 dest: "10.0.0.0/24".parse().unwrap(),
                 next_hop: hop(1),
+                next_hop_id: None,
                 metric: 20,
                 source: RouteSource::Static,
             },
             Route {
                 dest: "10.0.0.0/24".parse().unwrap(),
                 next_hop: hop(2),
+                next_hop_id: None,
                 metric: 5,
                 source: RouteSource::Static,
             },
@@ -384,6 +400,7 @@ mod tests {
 
         snapshot.publish(RoutingTable::new(vec![Route::dynamic(
             ip("10.0.0.4"),
+            NodeId(ip("10.0.0.4")),
             hop(4),
             2,
         )]));

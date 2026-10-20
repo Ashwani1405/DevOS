@@ -9,16 +9,16 @@ overlay fails over to an alternate path when a link dies.
 | --------- | ------ | ----- |
 | M1 UDP transport | done | `wire.rs`, `transport.rs`, message mode. |
 | M2 TUN overlay | done | `tun.rs`, `overlay.rs`, two-node forwarding. |
-| M3 peer lifecycle | **not implemented** | no probe state machine. M5 adds a minimal heartbeat/timeout in `router.rs` instead. |
+| M3 peer lifecycle | added after M5 | `src/lifecycle.rs` implements the probe state machine; the control plane now consumes its actions. |
 | M4 multi-hop routing | done | static routes, destination-aware forwarding, TTL. |
 | M5 topology + convergence | this milestone | link-state exchange, dijkstra, failure detection, failover. |
 
-M3 is still missing as a general lifecycle service. M5 needs *some* liveness
-signal, so the control plane derives it from the periodic link advertisements it
-already sends: a peer that goes quiet for `link_timeout` is treated as down. That
-is the "health mechanism" M5 integrates with; it lives in `router.rs`, not in a
-separate M3 monitor. When a real M3 lands, `Router::neighbor_of`/liveness can read
-its state instead.
+M5 was written before M3 existed, so the control plane derived liveness from the
+periodic link advertisements it already sends: a peer that goes quiet for
+`link_timeout` was treated as down. That signal now lives in
+`src/lifecycle.rs`: a `Connected`/`Suspect`/`Disconnected` state machine with
+probes and exponential backoff, which the router drives and consumes. The
+heartbeat/timeout semantics are unchanged.
 
 ## Modules
 

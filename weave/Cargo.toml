@@ -21,3 +21,13 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tun = { version = "0.8", features = ["async"] }
+hmac = "0.12"
+sha2 = "0.10"
+snow = "0.9"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+getrandom = "0.2"
+
+[[bench]]
+name = "baseline"
+harness = false

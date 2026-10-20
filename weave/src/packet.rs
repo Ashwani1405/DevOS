@@ -129,11 +129,18 @@ pub fn hop_limit(packet: &[u8]) -> Option<u8> {
 pub fn decrement_hop_limit(packet: &mut [u8]) -> bool {
     match packet.first().map(|first| first >> 4) {
         Some(4) if packet.len() >= IPV4_MIN_HEADER_LEN => {
+            let ihl = packet[0] & 0x0f;
+            let header_len = usize::from(ihl) * 4;
+            // defence in depth: a caller could hand us a packet that was not run
+            // through `validate`, so never index past the buffer while fixing the
+            // header checksum.
+            if ihl < 5 || header_len > packet.len() {
+                return false;
+            }
             if packet[8] <= 1 {
                 return false;
             }
             packet[8] -= 1;
-            let header_len = usize::from(packet[0] & 0x0f) * 4;
             packet[10] = 0;
             packet[11] = 0;
             let checksum = ipv4_checksum(&packet[..header_len]);
@@ -366,5 +373,21 @@ mod tests {
         packet[7] = 5;
         assert!(decrement_hop_limit(&mut packet));
         assert_eq!(hop_limit(&packet), Some(4));
+    }
+
+    #[test]
+    fn decrementing_rejects_a_malformed_header_len_without_panicking() {
+        // ihl 15 means a 60 byte header but only 20 bytes are present. a caller
+        // that skipped validation must get `false`, not a slice-index panic.
+        let mut packet = ipv4(20);
+        packet[0] = 0x4f;
+        packet[8] = 64;
+        assert!(!decrement_hop_limit(&mut packet));
+
+        // and an ihl below the minimum.
+        let mut short = ipv4(20);
+        short[0] = 0x44;
+        short[8] = 64;
+        assert!(!decrement_hop_limit(&mut short));
     }
 }

@@ -8,14 +8,12 @@ How packets hop through intermediate peers, and how to run and test it.
 | --------- | ------ | ----- |
 | M1 UDP transport | done | `wire.rs`, `transport.rs`, message mode. |
 | M2 TUN overlay | done | `tun.rs`, `overlay.rs`, two-node forwarding. |
-| M3 peer lifecycle | **not implemented** | no probing, no suspect/connected/disconnected states. |
+| M3 peer lifecycle | added after M4 | `src/lifecycle.rs` drives Connected/Suspect/Disconnected and probes; `src/peer.rs` remains the fast availability flag consulted while forwarding. |
 | M4 multi-hop routing | this milestone | static routes, destination-aware forwarding, TTL. |
 
-Because M3 is missing, M4 uses a deliberately tiny stand-in, `src/peer.rs`.
-`PeerSet` just records which peers are configured and an `available` flag per
-peer. `forward::decide` asks `PeerSet::is_available` before choosing a next hop.
-When M3 lands, `is_available` should read the live peer state instead. Nothing
-else here depends on M3.
+M4 was written while M3 was only a stand-in, so `forward::decide` asks
+`PeerSet::is_available` before choosing a next hop. That flag is now kept in
+sync with the lifecycle state machine, so forwarding follows live link state.
 
 ## Routing table
 

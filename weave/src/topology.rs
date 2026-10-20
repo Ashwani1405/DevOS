@@ -418,9 +418,13 @@ impl Topology {
             None => {}
         }
 
-        // a brand new link: check resource limits before storing.
-        let new_node = !self.nodes.contains(&advert.origin);
-        if new_node && self.nodes.len() >= self.limits.max_nodes {
+        // a brand new link: check resource limits before storing. both the tail
+        // and the head may be new nodes, and a peer must not be able to slip an
+        // extra node past the cap by adding links whose head it has not seen.
+        let adds_origin = !self.nodes.contains(&advert.origin);
+        let adds_head = advert.to != self.local && !self.nodes.contains(&advert.to);
+        let new_nodes = usize::from(adds_origin) + usize::from(adds_head);
+        if new_nodes > 0 && self.nodes.len() + new_nodes > self.limits.max_nodes {
             return Applied::Invalid(RejectReason::LimitReached);
         }
         if self.link_count() >= self.limits.max_links {
@@ -559,7 +563,7 @@ impl Topology {
                 continue;
             };
             let metric = cost.min(u64::from(u32::MAX)) as u32;
-            routes.push(Route::dynamic(node.0, addr, metric));
+            routes.push(Route::dynamic(node.0, hop, addr, metric));
         }
         routes.sort_by_key(|route| route.dest.addr());
         routes
@@ -956,6 +960,35 @@ mod tests {
                 Instant::now()
             ),
             Applied::Invalid(RejectReason::LimitReached)
+        );
+    }
+
+    #[test]
+    fn head_nodes_count_against_the_node_limit() {
+        // regression: only the advertisement's *origin* used to be checked
+        // against `max_nodes`, so a peer could keep introducing new head nodes
+        // by describing links to them and exceed the cap while staying under
+        // `max_links`.
+        let limits = Limits {
+            max_nodes: 2,
+            max_links: 8,
+        };
+        let mut topo = Topology::new(node("10.0.0.1"), addr(4001)).with_limits(limits);
+        topo.add_neighbor(node("10.0.0.2"), addr(4002), 1);
+
+        // the origin (b) is known, but the head (c) is new: that would be a
+        // third node, over the cap of two (self + b).
+        assert_eq!(
+            topo.apply(
+                &advert("10.0.0.2", 1, "10.0.0.2", "10.0.0.3", 1, LinkState::Up),
+                Instant::now()
+            ),
+            Applied::Invalid(RejectReason::LimitReached)
+        );
+        assert_eq!(
+            topo.node_count(),
+            2,
+            "the extra head node was stored anyway"
         );
     }
 

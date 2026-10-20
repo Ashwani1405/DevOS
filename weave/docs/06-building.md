@@ -111,7 +111,7 @@ The transport is the foundation. The README "Not done yet" list maps to future
 layers, roughly in dependency order:
 
 1. **Real wire protocol** — replace the placeholder 3-byte header.
-2. **Crypto** — encrypt/authenticate frames.
+2. **Crypto** — encrypt/authenticate the data plane (control messages already use Noise IK).
 3. **TUN device + IP forwarding** — carry actual IP packets.
 4. **Peer discovery** — stop hand-configuring addresses.
 5. **Routing / multi-hop** — reach peers with no direct link.

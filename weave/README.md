@@ -5,15 +5,23 @@ virtual network on top of the physical one, so peers can exchange IP packets
 without a direct link between them.
 
 This repo has the UDP transport (M1), the two-node TUN overlay (M2), multi-hop
-routing with static routes (M4), and topology-driven routing with automatic
-failover (M5). Peers now exchange link state, calculate routes with Dijkstra, and
-switch to an alternate path when a link fails. Peer lifecycle/probing (M3) is
-still not a separate service; M5 derives liveness from the control plane's
-heartbeats. Encryption, discovery, and endpoint migration aren't built yet.
+routing with static routes (M4), topology-driven routing with automatic failover
+(M5), authenticated endpoint migration with relay fallback (M6), and the M7
+hardening pass. Peers exchange link state, calculate routes with Dijkstra,
+switch to an alternate path when a link fails, authenticate each other with a
+Noise IK handshake, encrypt control messages, migrate a peer's UDP endpoint when
+an authenticated message says it moved, and fall back to a relay when a direct
+path is dead. M7 audited the implementation, fixed several correctness and
+security defects, and added fault-injection, lifecycle, rate-limiting, fuzzing
+and benchmark coverage.
 
 See [`docs/08-m4-routing.md`](./docs/08-m4-routing.md) for static multi-hop
-routing and [`docs/09-m5-topology.md`](./docs/09-m5-topology.md) for topology
-exchange, failure detection, and recovery.
+routing, [`docs/09-m5-topology.md`](./docs/09-m5-topology.md) for topology
+exchange, failure detection and recovery,
+[`docs/10-m6-migration-relay.md`](./docs/10-m6-migration-relay.md) for endpoint
+migration, relay fallback and control authentication, and
+[`docs/11-m7-hardening.md`](./docs/11-m7-hardening.md) for the M7 audit,
+security review, fault injection and benchmarks.
 
 ## The transport
 
@@ -93,35 +101,53 @@ CLI options:
                       routing and automatic failover (with --tun)
 --heartbeat-ms <N>    control-plane heartbeat interval (with --tun)
 --link-timeout-ms <N> how long a silent neighbour is trusted (with --tun)
+--identity <HEX>      this node's long-term private key; enables authenticated,
+                      encrypted control sessions (with --tun)
+--peer-key <IP=HEX>   a neighbour's static public key, repeatable; required for
+                      every neighbour when --identity is set (with --tun)
+--relay <ADDR:PORT>   relay to fall back to when a neighbour is unreachable
+                      (with --tun)
+--serve-relay         forward relay envelopes for neighbours; run this node as a
+                      relay (with --tun)
+--control-rate-limit <N> control messages per second accepted from one source
+                      (default 32; 0 disables; with --tun)
+--mtu <N>             overlay MTU (default 1420; with --tun)
+--queue-depth <N>     packets buffered per direction (default 1024; with --tun)
 -h, --help            print help
 -V, --version         print version
 ```
 
 ## Development
 
-Format, lint, and test:
+Format, lint, test, and benchmark:
 
 ```sh
 cargo fmt --all
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
+cargo bench --bench baseline
 ```
 
 Tests live beside the modules in `src/` (`wire`, `packet`, `route`, `forward`,
-`peer`, `overlay`, `topology`, `control`, `router`) and in `tests/`
-(`transport.rs`, `routing.rs`, `topology.rs`, and the root-only `tun_open.rs`).
+`peer`, `noise`, `rate`, `lifecycle`, `endpoints`, `relay`, `overlay`,
+`topology`, `control`, `router`) and in `tests/` (`transport.rs`, `routing.rs`,
+`topology.rs`, `connectivity.rs`, `fuzz.rs`, and the root-only `tun_open.rs`).
 They use random free ports, a fake TUN, and short timeouts. `topology.rs`
-includes a deterministic no-sleep simulation of a four-node failover.
+includes a deterministic no-sleep simulation of failover and of a full
+partition-and-heal; `fuzz.rs` is a deterministic mutational fuzzer over every
+wire-facing decoder. `benches/baseline.rs` measures the pure hot paths, the
+Noise record layer, and loopback end-to-end paths (direct and two-hop).
 
 ## Not done yet
 
-- no encryption or authentication, including for topology advertisements
+- data-plane packets are not encrypted; only control-plane traffic is
+- authentication is per-peer Noise IK, but a compromised long-term key is not
+  detected (no rotation or revocation)
 - no delivery, ordering, or duplicate protection
 - peer addresses are set by hand, no discovery
-- no peer lifecycle/probing (M3) as its own service; liveness comes from the
-  control-plane heartbeat
 - convergence is eventual, not instantaneous or strongly consistent
-- no endpoint migration, NAT traversal, or relay fallback (M6)
+- NAT traversal is heuristic (advertised endpoint candidates plus relay fallback),
+  not a full ICE-style negotiation
 - the frame format is a placeholder and will change
 
 ## License

@@ -20,11 +20,23 @@ pub const KIND_LINK_ADVERT: u8 = 1;
 /// a request for the sender's peer to reply with everything it knows.
 pub const KIND_LINK_REQUEST: u8 = 2;
 
+/// an endpoint update: the sender's physical endpoints have changed.
+pub const KIND_ENDPOINT_UPDATE: u8 = 3;
+
+/// a hole-punch probe, sent directly to a candidate endpoint to open a nat.
+pub const KIND_PUNCH: u8 = 4;
+
 /// hard cap on a single control message body.
 pub const MAX_CONTROL_BYTES: usize = 256;
 
+/// most candidate endpoints an update may carry.
+pub const MAX_CANDIDATE_ENDPOINTS: u8 = 4;
+
 const ADVERT_LEN: usize = 33;
 const REQUEST_LEN: usize = 11;
+const ENDPOINT_UPDATE_HEADER: usize = 14;
+const ENDPOINT_ADDR_LEN: usize = 6;
+const PUNCH_LEN: usize = 13;
 
 /// a topology control message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +49,24 @@ pub enum Message {
         origin: NodeId,
         /// the requester's udp endpoint.
         origin_addr: SocketAddr,
+    },
+    /// the sender's physical endpoints have changed. `epoch` orders updates so a
+    /// delayed one cannot roll an endpoint back.
+    EndpointUpdate {
+        /// the sender's identity.
+        origin: NodeId,
+        /// monotonically increasing revision of this update.
+        epoch: u64,
+        /// candidate endpoints the sender believes it is reachable at.
+        addrs: Vec<SocketAddr>,
+    },
+    /// a hole-punch probe. receiving one proves the sender can reach us from the
+    /// udp address it arrived on, which is what validates an endpoint.
+    Punch {
+        /// the sender's identity.
+        origin: NodeId,
+        /// opaque token echoed back to correlate the probe.
+        token: u64,
     },
 }
 
@@ -64,6 +94,8 @@ pub enum ControlError {
     UnsupportedAddress,
     /// a state byte that was neither up nor down.
     BadState(u8),
+    /// an endpoint update carried too many candidate endpoints.
+    TooManyEndpoints(u8),
 }
 
 impl fmt::Display for ControlError {
@@ -80,6 +112,10 @@ impl fmt::Display for ControlError {
             ),
             Self::UnsupportedAddress => write!(f, "control message carries a non-IPv4 endpoint"),
             Self::BadState(state) => write!(f, "unknown link state: {state}"),
+            Self::TooManyEndpoints(count) => write!(
+                f,
+                "endpoint update carries {count} endpoints (maximum {MAX_CANDIDATE_ENDPOINTS})"
+            ),
         }
     }
 }
@@ -115,6 +151,35 @@ pub fn encode(message: &Message) -> Result<Vec<u8>, ControlError> {
             bytes.extend_from_slice(&origin.0.octets());
             put_addr(&mut bytes, *origin_addr)?;
             debug_assert_eq!(bytes.len(), REQUEST_LEN);
+            Ok(bytes)
+        }
+        Message::EndpointUpdate {
+            origin,
+            epoch,
+            addrs,
+        } => {
+            let count = u8::try_from(addrs.len())
+                .map_err(|_| ControlError::TooManyEndpoints(MAX_CANDIDATE_ENDPOINTS))?;
+            if count > MAX_CANDIDATE_ENDPOINTS {
+                return Err(ControlError::TooManyEndpoints(count));
+            }
+            let mut bytes =
+                Vec::with_capacity(ENDPOINT_UPDATE_HEADER + addrs.len() * ENDPOINT_ADDR_LEN);
+            bytes.push(KIND_ENDPOINT_UPDATE);
+            bytes.extend_from_slice(&origin.0.octets());
+            bytes.extend_from_slice(&epoch.to_be_bytes());
+            bytes.push(count);
+            for addr in addrs {
+                put_addr(&mut bytes, *addr)?;
+            }
+            Ok(bytes)
+        }
+        Message::Punch { origin, token } => {
+            let mut bytes = Vec::with_capacity(PUNCH_LEN);
+            bytes.push(KIND_PUNCH);
+            bytes.extend_from_slice(&origin.0.octets());
+            bytes.extend_from_slice(&token.to_be_bytes());
+            debug_assert_eq!(bytes.len(), PUNCH_LEN);
             Ok(bytes)
         }
     }
@@ -175,6 +240,46 @@ pub fn decode(bytes: &[u8]) -> Result<Message, ControlError> {
                 origin,
                 origin_addr,
             })
+        }
+        KIND_ENDPOINT_UPDATE => {
+            if bytes.len() < ENDPOINT_UPDATE_HEADER {
+                return Err(ControlError::TooShort { len: bytes.len() });
+            }
+            let origin = node(&bytes[1..5]);
+            let mut epoch_bytes = [0u8; 8];
+            epoch_bytes.copy_from_slice(&bytes[5..13]);
+            let epoch = u64::from_be_bytes(epoch_bytes);
+            let count = bytes[13];
+            if count > MAX_CANDIDATE_ENDPOINTS {
+                return Err(ControlError::TooManyEndpoints(count));
+            }
+            let expected = ENDPOINT_UPDATE_HEADER + usize::from(count) * ENDPOINT_ADDR_LEN;
+            if bytes.len() != expected {
+                return Err(ControlError::BadLength { len: bytes.len() });
+            }
+            let mut addrs = Vec::with_capacity(usize::from(count));
+            for i in 0..usize::from(count) {
+                let start = ENDPOINT_UPDATE_HEADER + i * ENDPOINT_ADDR_LEN;
+                addrs.push(read_addr(&bytes[start..start + ENDPOINT_ADDR_LEN]));
+            }
+            Ok(Message::EndpointUpdate {
+                origin,
+                epoch,
+                addrs,
+            })
+        }
+        KIND_PUNCH => {
+            if bytes.len() < PUNCH_LEN {
+                return Err(ControlError::TooShort { len: bytes.len() });
+            }
+            if bytes.len() > PUNCH_LEN {
+                return Err(ControlError::BadLength { len: bytes.len() });
+            }
+            let origin = node(&bytes[1..5]);
+            let mut token_bytes = [0u8; 8];
+            token_bytes.copy_from_slice(&bytes[5..13]);
+            let token = u64::from_be_bytes(token_bytes);
+            Ok(Message::Punch { origin, token })
         }
         other => Err(ControlError::UnknownKind(other)),
     }
@@ -280,6 +385,70 @@ mod tests {
         let mut bytes = encode(&Message::LinkAdvert(sample_advert())).unwrap();
         bytes[23] = 9;
         assert_eq!(decode(&bytes), Err(ControlError::BadState(9)));
+    }
+
+    #[test]
+    fn round_trips_an_endpoint_update() {
+        let message = Message::EndpointUpdate {
+            origin: node("10.0.0.2"),
+            epoch: 7,
+            addrs: vec![addr(4102), addr(4103)],
+        };
+        let bytes = encode(&message).expect("encode");
+        assert_eq!(bytes.len(), ENDPOINT_UPDATE_HEADER + 2 * ENDPOINT_ADDR_LEN);
+        assert_eq!(decode(&bytes).expect("decode"), message);
+    }
+
+    #[test]
+    fn round_trips_a_punch() {
+        let message = Message::Punch {
+            origin: node("10.0.0.2"),
+            token: 0xdead_beef,
+        };
+        let bytes = encode(&message).expect("encode");
+        assert_eq!(bytes.len(), PUNCH_LEN);
+        assert_eq!(decode(&bytes).expect("decode"), message);
+    }
+
+    #[test]
+    fn rejects_too_many_endpoints() {
+        let addrs = vec![addr(1); usize::from(MAX_CANDIDATE_ENDPOINTS) + 1];
+        let message = Message::EndpointUpdate {
+            origin: node("10.0.0.2"),
+            epoch: 1,
+            addrs,
+        };
+        assert_eq!(
+            encode(&message),
+            Err(ControlError::TooManyEndpoints(MAX_CANDIDATE_ENDPOINTS + 1))
+        );
+
+        // a hand-built body claiming too many endpoints is refused on decode.
+        let mut bytes = vec![KIND_ENDPOINT_UPDATE];
+        bytes.extend_from_slice(&[10, 0, 0, 2]);
+        bytes.extend_from_slice(&1u64.to_be_bytes());
+        bytes.push(MAX_CANDIDATE_ENDPOINTS + 1);
+        assert_eq!(
+            decode(&bytes),
+            Err(ControlError::TooManyEndpoints(MAX_CANDIDATE_ENDPOINTS + 1))
+        );
+    }
+
+    #[test]
+    fn rejects_a_miscounted_endpoint_update() {
+        let message = Message::EndpointUpdate {
+            origin: node("10.0.0.2"),
+            epoch: 1,
+            addrs: vec![addr(1)],
+        };
+        let mut bytes = encode(&message).unwrap();
+        bytes.push(0);
+        assert_eq!(
+            decode(&bytes),
+            Err(ControlError::BadLength {
+                len: ENDPOINT_UPDATE_HEADER + ENDPOINT_ADDR_LEN + 1
+            })
+        );
     }
 
     #[test]
